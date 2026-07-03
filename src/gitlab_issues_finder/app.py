@@ -595,6 +595,85 @@ async def api_users() -> JSONResponse:
     return JSONResponse({"users": items})
 
 
+@app.get("/api/items", tags=["Users"])
+async def api_items(
+    username: str = Query(..., description="GitLab 用户名"),
+    labels: str = Query("", description="逗号分隔的标签"),
+    since: str = Query("", description="只看 updated_at >= 此日期 (YYYY-MM-DD)"),
+    until: str = Query("", description="只看 updated_at <= 此日期 (YYYY-MM-DD)"),
+) -> JSONResponse:
+    """JSON 版 /search：返回 username 的所有 opened item 列表。
+
+    程序化消费者（CLI / 看板外部集成）应该用这个端点而不是
+    解析 /search 的 HTML。响应结构与 /api/export.md 的列对齐：
+      [{type, iid, project_id, title, state, web_url,
+        labels, assignee, updated_at, reasons}, ...]
+    """
+    username = username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="missing username")
+    s_date = _parse_date(since)
+    u_date = _parse_date(until)
+    if since and not s_date:
+        raise HTTPException(status_code=400, detail="since format error: expected YYYY-MM-DD")
+    if until and not u_date:
+        raise HTTPException(status_code=400, detail="until format error: expected YYYY-MM-DD")
+    label_list = [s.strip() for s in labels.split(",") if s.strip()]
+    cfg = AppConfig.from_env()
+    gl = build_client(cfg)
+    issue_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR)
+    issue_lists: dict[str, list[IssueRef]] = {
+        rel.value: fetch_items(gl, username, rel, ItemKind.ISSUE, cfg.page_size)
+        for rel in issue_relations
+    }
+    mr_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR, Relation.REVIEWER)
+    mr_lists: dict[str, list[IssueRef]] = {
+        rel.value: fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, cfg.page_size)
+        for rel in mr_relations
+    }
+    issues_labeled: list[IssueRef] = []
+    mrs_labeled: list[IssueRef] = []
+    if label_list:
+        issues_labeled = fetch_labeled(gl, label_list, cfg.page_size)
+        mrs_labeled = fetch_labeled(gl, label_list, cfg.page_size, kind=ItemKind.MERGE_REQUEST)
+    all_items = dedupe(
+        *issue_lists.values(),
+        *mr_lists.values(),
+        issues_labeled,
+        mrs_labeled,
+    )
+    all_items = _filter_by_time(all_items, s_date, u_date)
+    labeled_keys: set[tuple[str, int, int]] = set()
+    for it in issues_labeled:
+        labeled_keys.add(it.key)
+    for it in mrs_labeled:
+        labeled_keys.add(it.key)
+    out = []
+    for it in all_items:
+        reasons: list[str] = []
+        bucket = issue_lists if it.type == "issue" else mr_lists
+        for rel, lst in bucket.items():
+            if any(x.key == it.key for x in lst):
+                reasons.append(rel)
+        if label_list and it.key in labeled_keys:
+            reasons.append("label")
+        out.append(
+            {
+                "type": it.type,
+                "iid": it.iid,
+                "project_id": it.project_id,
+                "title": it.title,
+                "state": it.state,
+                "web_url": it.web_url,
+                "labels": list(it.labels),
+                "assignee": it.assignee,
+                "updated_at": it.updated_at,
+                "reasons": reasons,
+            }
+        )
+    return JSONResponse({"count": len(out), "items": out})
+
+
 @app.get("/api/recent-users", tags=["Users"])
 async def api_recent_users() -> JSONResponse:
     try:

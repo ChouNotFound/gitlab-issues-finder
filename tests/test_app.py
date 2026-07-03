@@ -1219,3 +1219,86 @@ class TestStatsEndpoint:
             assert k in s
             assert isinstance(s[k], int)
             assert s[k] >= 0
+
+
+class TestItemsEndpoint:
+    @responses.activate
+    def test_items_basic(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        for _ in range(3):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[
+                    {
+                        "project_id": 1,
+                        "iid": 1,
+                        "title": "Foo",
+                        "state": "opened",
+                        "labels": ["bug"],
+                        "assignee": {"username": "alice"},
+                        "web_url": "https://gl/1",
+                        "updated_at": "2026-07-01T00:00:00Z",
+                    },
+                    {
+                        "project_id": 1,
+                        "iid": 2,
+                        "title": "Bar",
+                        "state": "closed",
+                        "labels": [],
+                        "assignee": None,
+                        "web_url": "https://gl/2",
+                        "updated_at": "2026-06-01T00:00:00Z",
+                    },
+                ],
+                status=200,
+                match_querystring=False,
+            )
+        for _ in range(4):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[
+                    {
+                        "project_id": 2,
+                        "iid": 5,
+                        "title": "MR",
+                        "state": "opened",
+                        "labels": [],
+                        "assignee": None,
+                        "web_url": "https://gl/mr5",
+                        "updated_at": "2026-07-02T00:00:00Z",
+                    }
+                ],
+                status=200,
+                match_querystring=False,
+            )
+        r = client.get("/api/items", params={"username": "alice"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["count"] == 3
+        items = data["items"]
+        types = {it["type"] for it in items}
+        assert types == {"issue", "merge_request"}
+        # 验证字段都存在
+        for it in items:
+            assert "iid" in it
+            assert "title" in it
+            assert "web_url" in it
+            assert "labels" in it
+            assert "reasons" in it
+            assert isinstance(it["reasons"], list)
+
+    @responses.activate
+    def test_items_missing_username(self, client, tmp_db):
+        r = client.get("/api/items")
+        assert r.status_code == 422  # FastAPI Query validation
+
+    @responses.activate
+    def test_items_invalid_date(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        r = client.get("/api/items", params={"username": "alice", "since": "garbage"})
+        assert r.status_code == 400
+        assert "since" in r.json()["detail"]
