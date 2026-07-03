@@ -910,3 +910,69 @@ class TestParseDate:
 
         assert _parse_date("2025-02-30") is None
         assert _parse_date("2025-13-01") is None
+
+
+class TestMetricsEndpoint:
+    def test_metrics_endpoint_returns_prometheus_format(self, client, tmp_db):
+        r = client.get("/metrics")
+        assert r.status_code == 200
+        assert "text/plain" in r.headers["content-type"]
+        # Should have process_uptime_seconds even with no business metrics yet
+        assert "process_uptime_seconds" in r.text
+
+    def test_metrics_increments_on_request(self, client, tmp_db):
+        client.get("/")
+        r = client.get("/metrics")
+        assert "http_requests_total" in r.text
+        # The / route should be counted
+        assert 'path="/"' in r.text
+
+
+class TestMetricsUnit:
+    def test_counter_increments(self):
+        from gitlab_issues_finder.metrics import Metrics
+
+        m = Metrics()
+        m.inc("test_counter")
+        m.inc("test_counter", 2.0)
+        m.inc("test_counter", env="prod")
+        rendered = m.render()
+        # base counter
+        assert "test_counter 3" in rendered
+        # labeled
+        assert 'env="prod"' in rendered
+        label_line = "test_counter{env=" + chr(34) + "prod" + chr(34) + "} 1"
+        assert label_line in rendered
+
+    def test_histogram_observation(self):
+        from gitlab_issues_finder.metrics import Metrics
+
+        m = Metrics()
+        m.observe("latency_ms", 10.0)
+        m.observe("latency_ms", 20.0)
+        m.observe("latency_ms", 30.0)
+        rendered = m.render()
+        assert "latency_ms_count 3" in rendered
+        assert "latency_ms_sum 60" in rendered
+        assert "latency_ms_max 30" in rendered
+
+    def test_gauge(self):
+        from gitlab_issues_finder.metrics import Metrics
+
+        m = Metrics()
+        m.set_gauge("queue_depth", 5)
+        m.set_gauge("queue_depth", 7, region="us")
+        rendered = m.render()
+        assert "queue_depth 5" in rendered
+        assert 'region="us"' in rendered
+        label_line2 = "queue_depth{region=" + chr(34) + "us" + chr(34) + "} 7"
+        assert label_line2 in rendered
+
+    def test_singleton(self):
+        from gitlab_issues_finder import metrics
+
+        metrics.reset_metrics()
+        a = metrics.get_metrics()
+        b = metrics.get_metrics()
+        assert a is b
+        metrics.reset_metrics()

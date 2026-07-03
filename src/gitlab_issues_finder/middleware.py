@@ -65,6 +65,17 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         # /static/* 噪音较大，跳过日志。
         is_static = request.url.path.startswith("/static/")
         if not is_static:
+            try:
+                from gitlab_issues_finder.metrics import get_metrics
+
+                m = get_metrics()
+                m.inc(
+                    "http_requests_total",
+                    method=request.method,
+                    path=request.url.path,
+                )
+            except Exception:  # noqa: BLE001
+                pass
             logger.info(
                 "request start",
                 extra={
@@ -92,6 +103,12 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         duration_ms = (time.perf_counter() - start) * 1000
         response.headers[self.header_name] = request_id
         if not is_static:
+            try:
+                from gitlab_issues_finder.metrics import get_metrics
+
+                get_metrics().observe("http_request_duration_ms", duration_ms)
+            except Exception:  # noqa: BLE001
+                pass
             logger.info(
                 "request end",
                 extra={

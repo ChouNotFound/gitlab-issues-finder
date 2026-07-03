@@ -37,6 +37,7 @@ from gitlab_issues_finder.client import build_client
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.logging_setup import get_logger
+from gitlab_issues_finder.metrics import get_metrics
 from gitlab_issues_finder.middleware import RequestIDMiddleware
 from gitlab_issues_finder.models import IssueRef
 from gitlab_issues_finder.project_resolver import resolve as resolve_projects
@@ -720,6 +721,21 @@ async def api_health() -> JSONResponse:
 
     overall = "ok" if all(c["ok"] for c in checks.values()) else "degraded"
     return JSONResponse({"status": overall, "checks": checks})
+
+
+@app.get("/metrics", tags=["System"])
+async def api_metrics() -> Response:
+    """Prometheus 文本格式的进程内指标。
+
+    包含：
+      - process_uptime_seconds：自启动以来的秒数
+      - 业务计数器（按需注册）
+      - 业务直方图（按需注册）
+    """
+    return Response(
+        content=get_metrics().render(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 # ----- 数据导出 -----
