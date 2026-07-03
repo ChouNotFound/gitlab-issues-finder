@@ -566,3 +566,55 @@ class TestSystemEndpoints:
             assert data["checks"]["db"]["ok"] is True
         finally:
             m.undo()
+
+
+class TestExportEndpoints:
+    @responses.activate
+    def test_export_csv(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        # 3 issue + 4 MR endpoints (no labels in query)
+        for _ in range(3):
+            responses.add(responses.GET, f"{API_BASE}/issues", json=[{
+                "project_id": 1, "iid": 7, "title": "Foo", "state": "opened",
+                "labels": ["bug"], "assignee": {"username": "alice"},
+                "web_url": "https://gl/x", "updated_at": "2026-07-01T00:00:00Z",
+            }], status=200, match_querystring=False)
+        for _ in range(4):
+            responses.add(responses.GET, f"{API_BASE}/merge_requests", json=[], status=200, match_querystring=False)
+        r = client.get("/api/export.csv?username=alice")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/csv")
+        assert "attachment" in r.headers["content-disposition"]
+        text = r.text
+        assert "type,iid,project_id,title,state" in text
+        assert "issue,7,1" in text
+        assert '"bug"' in text  # labels
+
+    @responses.activate
+    def test_export_md(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        for _ in range(3):
+            responses.add(responses.GET, f"{API_BASE}/issues", json=[{
+                "project_id": 1, "iid": 7, "title": "Foo", "state": "opened",
+                "labels": [], "assignee": None,
+                "web_url": "https://gl/x", "updated_at": "2026-07-01T00:00:00Z",
+            }], status=200, match_querystring=False)
+        for _ in range(4):
+            responses.add(responses.GET, f"{API_BASE}/merge_requests", json=[], status=200, match_querystring=False)
+        r = client.get("/api/export.md?username=alice")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/markdown")
+        text = r.text
+        assert "# @alice" in text
+        assert "## Issues" in text
+        assert "## Merge Requests" in text
+        assert "[Foo](https://gl/x)" in text
+
+    def test_export_missing_username(self, client, tmp_db):
+        # No env, no username -> either ConfigError-rendered or 422
+        r = client.get("/api/export.csv")
+        assert r.status_code in (200, 422)
+        if r.status_code == 200:
+            assert "GITLAB_" in r.text or "配置" in r.text

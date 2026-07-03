@@ -27,7 +27,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -591,6 +591,91 @@ async def api_health() -> JSONResponse:
 
     overall = "ok" if all(c["ok"] for c in checks.values()) else "degraded"
     return JSONResponse({"status": overall, "checks": checks})
+
+
+# ----- 数据导出 -----
+def _collect_export_items(username: str, labels_raw: str) -> list[IssueRef]:
+    """复用 /search 的查询逻辑，组装导出用的 items 列表。
+
+    失败抛 AppError（ConfigError / AuthError / ...），由全局 handler 渲染。
+    """
+    cfg = AppConfig.from_env()
+    gl = build_client(cfg)
+    label_list = [s.strip() for s in labels_raw.split(",") if s.strip()]
+    issue_lists = {
+        rel.value: fetch_items(gl, username, rel, ItemKind.ISSUE, cfg.page_size)
+        for rel in (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR)
+    }
+    mr_lists = {
+        rel.value: fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, cfg.page_size)
+        for rel in (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR, Relation.REVIEWER)
+    }
+    issues_labeled = fetch_labeled(gl, label_list, cfg.page_size) if label_list else []
+    mrs_labeled = (
+        fetch_labeled(gl, label_list, cfg.page_size, kind=ItemKind.MERGE_REQUEST)
+        if label_list else []
+    )
+    return dedupe(*issue_lists.values(), *mr_lists.values(), issues_labeled, mrs_labeled)
+
+
+@app.get("/api/export.csv")
+async def api_export_csv(username: str = Query(...), labels: str = Query("")) -> Response:
+    """以 CSV 格式导出与 username 相关的所有 item。
+
+    列：type, iid, project_id, title, state, web_url, labels, assignee, updated_at。
+    labels 多值以 `|` 拼接。"""
+    items = _collect_export_items(username, labels)
+    rows = ["type,iid,project_id,title,state,web_url,labels,assignee,updated_at"]
+    for it in items:
+        rows.append(",".join([
+            it.type,
+            str(it.iid),
+            str(it.project_id),
+            f'"{it.title.replace(chr(34), chr(34) + chr(34))}"',
+            it.state,
+            it.web_url,
+            f'"{"|".join(it.labels)}"',
+            it.assignee or "",
+            it.updated_at,
+        ]))
+    body = "\n".join(rows) + "\n"
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="gitlab-{username}-items.csv"'},
+    )
+
+
+@app.get("/api/export.md")
+async def api_export_md(username: str = Query(...), labels: str = Query("")) -> Response:
+    """以 Markdown 表格格式导出。便于贴进周报 / PR description。"""
+    items = _collect_export_items(username, labels)
+    issues = [it for it in items if it.type == "issue"]
+    mrs = [it for it in items if it.type == "merge_request"]
+
+    def render_section(title: str, lst: list[IssueRef]) -> str:
+        if not lst:
+            return f"## {title}\n\n_无_\n"
+        lines = [f"## {title} ({len(lst)})\n", "| IID | Title | State | Labels | Updated |", "|---|---|---|---|---|"]
+        for it in sorted(lst, key=lambda x: (x.project_id, x.iid)):
+            iid = f'!{it.iid}' if it.type == 'merge_request' else f'#{it.iid}'
+            title_cell = f'[{it.title}]({it.web_url})' if it.web_url else it.title
+            labels_cell = ", ".join(f'{lb}' for lb in it.labels[:5])
+            lines.append(f"| {iid} | {title_cell} | {it.state} | {labels_cell} | {it.updated_at[:10]} |")
+        return "\n".join(lines) + "\n"
+
+    body = (
+        f"# @{username} — GitLab Status Board 导出\n\n"
+        f"- Issue: **{len(issues)}** 条\n"
+        f"- MR: **{len(mrs)}** 条\n\n"
+        + render_section("Issues", issues)
+        + render_section("Merge Requests", mrs)
+    )
+    return Response(
+        content=body,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="gitlab-{username}-items.md"'},
+    )
 
 
 # ----- 错误处理 -----
