@@ -523,12 +523,12 @@ async def api_board_columns_list(
     username: str = Query(..., description="GitLab username"),
 ) -> JSONResponse:
     """返回某用户的列定义列表（首次访问会自动初始化内置列）。"""
-    username = _validate_username(username)
-    if not username:
+    valid = _validate_username(username)
+    if not valid:
         raise HTTPException(status_code=400, detail="missing username")
     dbp = _db_path()
-    columns = storage.list_columns(dbp, username)
-    return JSONResponse({"username": username, "columns": columns})
+    columns = storage.list_columns(dbp, valid)
+    return JSONResponse({"username": valid, "columns": columns})
 
 
 @app.post("/api/board/columns", tags=["Board"])
