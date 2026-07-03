@@ -1202,3 +1202,20 @@ class TestRoutesEndpoint:
             assert "tags" in route
             assert isinstance(route["methods"], list)
             assert len(route["methods"]) >= 1
+
+
+class TestStatsEndpoint:
+    def test_stats_returns_cache_and_storage(self, client, tmp_db):
+        r = client.get("/api/stats")
+        assert r.status_code == 200
+        data = r.json()
+        assert "storage" in data
+        # storage 子结构
+        s = data["storage"]
+        assert "db_path" in s
+        assert "db_bytes" in s
+        # 数字字段
+        for k in ("recent_users", "overrides", "columns", "cached_projects"):
+            assert k in s
+            assert isinstance(s[k], int)
+            assert s[k] >= 0

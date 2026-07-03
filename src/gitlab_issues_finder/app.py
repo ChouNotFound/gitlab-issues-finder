@@ -809,6 +809,44 @@ async def api_routes() -> JSONResponse:
     return JSONResponse({"count": len(routes), "routes": routes})
 
 
+@app.get("/api/stats", tags=["System"])
+async def api_stats() -> JSONResponse:
+    """汇总进程级统计：SQLite 库大小 + 4 张核心表的行数。"""
+    import os as _os
+
+    db_path = _db_path()
+    db_bytes = 0
+    with contextlib.suppress(OSError):
+        db_bytes = _os.path.getsize(db_path)
+    storage_stats: dict = {"db_path": db_path, "db_bytes": db_bytes}
+    try:
+        with _connect(db_path) as conn:
+            storage_stats["recent_users"] = conn.execute(
+                "SELECT COUNT(*) FROM user_prefs"
+            ).fetchone()[0]
+            storage_stats["overrides"] = conn.execute(
+                "SELECT COUNT(*) FROM board_overrides"
+            ).fetchone()[0]
+            storage_stats["columns"] = conn.execute(
+                "SELECT COUNT(*) FROM board_columns"
+            ).fetchone()[0]
+            storage_stats["cached_projects"] = conn.execute(
+                "SELECT COUNT(*) FROM project_cache"
+            ).fetchone()[0]
+    except Exception as e:  # noqa: BLE001
+        storage_stats["error"] = str(e)
+    return JSONResponse({"storage": storage_stats})
+
+
+def _connect(db_path):
+    """连接到 SQLite 并返回行 dict。"""
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 # ----- 分桶预览 -----
 @app.post("/api/preview", tags=["Board"])
 async def api_preview(payload: dict = Body(...)) -> JSONResponse:
