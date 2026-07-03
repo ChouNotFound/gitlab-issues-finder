@@ -540,6 +540,48 @@ async def api_preferences(payload: dict = Body(...)) -> JSONResponse:
     return JSONResponse({"ok": True, "theme": theme})
 
 
+# ----- 系统端点 -----
+@app.get("/api/version")
+async def api_version() -> JSONResponse:
+    """返回应用版本与 Python / 关键依赖版本。便于部署后做版本核对。"""
+    from gitlab_issues_finder import __version__
+    import sys
+    return JSONResponse({
+        "app": __version__,
+        "python": sys.version.split()[0],
+        "fastapi": __import__("fastapi").__version__,
+    })
+
+
+@app.get("/api/health")
+async def api_health() -> JSONResponse:
+    """健康检查：检查 SQLite 可达 + GitLab config 是否配齐。
+
+    返回值：
+      - status: "ok" (全部正常) / "degraded" (可降级运行) / "down" (异常)
+      - checks: dict[check_name -> {ok, detail}]
+    """
+    checks: dict = {}
+
+    # 1) DB 可达性
+    try:
+        dbp = _db_path()
+        storage.list_recent_users(dbp, limit=1)
+        checks["db"] = {"ok": True, "detail": dbp}
+    except Exception as e:
+        checks["db"] = {"ok": False, "detail": str(e)}
+
+    # 2) GitLab 配置
+    try:
+        cfg = AppConfig.from_env()
+        checks["config"] = {"ok": True, "detail": cfg.url}
+    except ConfigError as e:
+        checks["config"] = {"ok": False, "detail": str(e)}
+
+    overall = "ok" if all(c["ok"] for c in checks.values()) else "degraded"
+    return JSONResponse({"status": overall, "checks": checks})
+
+
 # ----- 错误处理 -----
 def _try_cfg() -> AppConfig | None:
     try:

@@ -419,3 +419,39 @@ class TestApiUsers:
         resp = client.get("/api/users")
         assert resp.status_code == 200
         assert resp.json() == {"users": []}
+
+
+class TestSystemEndpoints:
+    def test_version(self, client, tmp_db):
+        r = client.get("/api/version")
+        assert r.status_code == 200
+        data = r.json()
+        assert "app" in data and data["app"]  # non-empty
+        assert "python" in data
+        assert "fastapi" in data
+
+    def test_health_ok_with_config(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        r = client.get("/api/health")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "ok"
+        assert data["checks"]["db"]["ok"] is True
+        assert data["checks"]["config"]["ok"] is True
+
+    def test_health_degraded_without_config(self, client, tmp_db):
+        # tmp_db 仍设了 DB_PATH；但删掉 GITLAB_URL/TOKEN 让 config 失败
+        import pytest
+        m = pytest.MonkeyPatch()
+        m.delenv("GITLAB_URL", raising=False)
+        m.delenv("GITLAB_TOKEN", raising=False)
+        try:
+            r = client.get("/api/health")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["status"] == "degraded"
+            assert data["checks"]["config"]["ok"] is False
+            assert data["checks"]["db"]["ok"] is True
+        finally:
+            m.undo()
