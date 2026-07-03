@@ -237,7 +237,6 @@ def list_recent_users(db_path: str | Path, limit: int = 10) -> list[str]:
     return [r["username"] for r in rows]
 
 
-
 # ----- Project name cache -----
 def get_project(db_path: str | Path, project_id: int) -> dict | None:
     """返回 {name, path_with_namespace} 或 None（未缓存）。"""

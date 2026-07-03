@@ -575,13 +575,32 @@ class TestExportEndpoints:
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         # 3 issue + 4 MR endpoints (no labels in query)
         for _ in range(3):
-            responses.add(responses.GET, f"{API_BASE}/issues", json=[{
-                "project_id": 1, "iid": 7, "title": "Foo", "state": "opened",
-                "labels": ["bug"], "assignee": {"username": "alice"},
-                "web_url": "https://gl/x", "updated_at": "2026-07-01T00:00:00Z",
-            }], status=200, match_querystring=False)
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[
+                    {
+                        "project_id": 1,
+                        "iid": 7,
+                        "title": "Foo",
+                        "state": "opened",
+                        "labels": ["bug"],
+                        "assignee": {"username": "alice"},
+                        "web_url": "https://gl/x",
+                        "updated_at": "2026-07-01T00:00:00Z",
+                    }
+                ],
+                status=200,
+                match_querystring=False,
+            )
         for _ in range(4):
-            responses.add(responses.GET, f"{API_BASE}/merge_requests", json=[], status=200, match_querystring=False)
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
         r = client.get("/api/export.csv?username=alice")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/csv")
@@ -596,13 +615,32 @@ class TestExportEndpoints:
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         for _ in range(3):
-            responses.add(responses.GET, f"{API_BASE}/issues", json=[{
-                "project_id": 1, "iid": 7, "title": "Foo", "state": "opened",
-                "labels": [], "assignee": None,
-                "web_url": "https://gl/x", "updated_at": "2026-07-01T00:00:00Z",
-            }], status=200, match_querystring=False)
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[
+                    {
+                        "project_id": 1,
+                        "iid": 7,
+                        "title": "Foo",
+                        "state": "opened",
+                        "labels": [],
+                        "assignee": None,
+                        "web_url": "https://gl/x",
+                        "updated_at": "2026-07-01T00:00:00Z",
+                    }
+                ],
+                status=200,
+                match_querystring=False,
+            )
         for _ in range(4):
-            responses.add(responses.GET, f"{API_BASE}/merge_requests", json=[], status=200, match_querystring=False)
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
         r = client.get("/api/export.md?username=alice")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/markdown")
@@ -628,9 +666,17 @@ class TestBoardFilterAndSort:
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         for _ in range(3):
-            responses.add(responses.GET, f"{API_BASE}/issues", json=[], status=200, match_querystring=False)
+            responses.add(
+                responses.GET, f"{API_BASE}/issues", json=[], status=200, match_querystring=False
+            )
         for _ in range(4):
-            responses.add(responses.GET, f"{API_BASE}/merge_requests", json=[], status=200, match_querystring=False)
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
         for view in ("all", "issues", "mrs", "relation", "project"):
             r = client.get(f"/board?username=alice&view={view}")
             assert r.status_code == 200
@@ -643,9 +689,17 @@ class TestBoardFilterAndSort:
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         for _ in range(3):
-            responses.add(responses.GET, f"{API_BASE}/issues", json=[], status=200, match_querystring=False)
+            responses.add(
+                responses.GET, f"{API_BASE}/issues", json=[], status=200, match_querystring=False
+            )
         for _ in range(4):
-            responses.add(responses.GET, f"{API_BASE}/merge_requests", json=[], status=200, match_querystring=False)
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
         r = client.get("/board?username=alice&view=summary")
         assert r.status_code == 200
         assert 'id="card-filter"' not in r.text
@@ -655,30 +709,45 @@ class TestBoardFilterAndSort:
 class TestProjectNameDisplay:
     @responses.activate
     def test_search_renders_project_name(self, client, monkeypatch, tmp_db):
-        monkeypatch.setenv('GITLAB_URL', 'https://gitlab.test')
-        monkeypatch.setenv('GITLAB_TOKEN', 'x')
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
         # Mock /issues to return one item
         for _ in range(3):
             responses.add(
-                responses.GET, f'{API_BASE}/issues',
-                json=[{
-                    'project_id': 42, 'iid': 1, 'title': 'X', 'state': 'opened',
-                    'labels': [], 'assignee': None,
-                    'web_url': 'https://gl/x', 'updated_at': '2026-07-01T00:00:00Z',
-                }], status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[
+                    {
+                        "project_id": 42,
+                        "iid": 1,
+                        "title": "X",
+                        "state": "opened",
+                        "labels": [],
+                        "assignee": None,
+                        "web_url": "https://gl/x",
+                        "updated_at": "2026-07-01T00:00:00Z",
+                    }
+                ],
+                status=200,
+                match_querystring=False,
             )
         for _ in range(4):
             responses.add(
-                responses.GET, f'{API_BASE}/merge_requests',
-                json=[], status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
             )
         # Mock /projects to return name for project_id 42
         responses.add(
-            responses.GET, f'{API_BASE}/projects',
-            json=[{'id': 42, 'name': 'Cool Project', 'path_with_namespace': 'team/cool'}],
-            status=200, match_querystring=False,
+            responses.GET,
+            f"{API_BASE}/projects",
+            json=[{"id": 42, "name": "Cool Project", "path_with_namespace": "team/cool"}],
+            status=200,
+            match_querystring=False,
         )
-        r = client.post('/search', data={'username': 'alice', 'labels': ''})
+        r = client.post("/search", data={"username": "alice", "labels": ""})
         assert r.status_code == 200
-        assert 'team/cool' in r.text
-        assert 'p42' in r.text
+        assert "team/cool" in r.text
+        assert "p42" in r.text

@@ -36,8 +36,7 @@ def _fetch_with_freshness(db_path: str) -> dict[int, tuple[dict, float]]:
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            "SELECT project_id, name, path_with_namespace, fetched_at "
-            "FROM project_cache"
+            "SELECT project_id, name, path_with_namespace, fetched_at FROM project_cache"
         ).fetchall()
     finally:
         conn.close()

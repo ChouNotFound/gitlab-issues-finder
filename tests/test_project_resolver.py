@@ -13,6 +13,7 @@ API_BASE = "https://gitlab.test/api/v4"
 @pytest.fixture
 def gl():
     import gitlab
+
     return gitlab.Gitlab(url="https://gitlab.test", private_token="x", api_version="4")
 
 

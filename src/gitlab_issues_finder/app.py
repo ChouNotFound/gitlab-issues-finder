@@ -36,6 +36,7 @@ from gitlab_issues_finder.client import build_client
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.logging_setup import get_logger
+from gitlab_issues_finder.middleware import RequestIDMiddleware
 from gitlab_issues_finder.models import IssueRef
 from gitlab_issues_finder.project_resolver import resolve as resolve_projects
 from gitlab_issues_finder.queries import (
@@ -72,6 +73,7 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="GitLab Status Board", lifespan=_lifespan)
+app.add_middleware(RequestIDMiddleware)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
@@ -631,7 +633,8 @@ def _collect_export_items(username: str, labels_raw: str) -> list[IssueRef]:
     issues_labeled = fetch_labeled(gl, label_list, cfg.page_size) if label_list else []
     mrs_labeled = (
         fetch_labeled(gl, label_list, cfg.page_size, kind=ItemKind.MERGE_REQUEST)
-        if label_list else []
+        if label_list
+        else []
     )
     return dedupe(*issue_lists.values(), *mr_lists.values(), issues_labeled, mrs_labeled)
 
@@ -645,17 +648,21 @@ async def api_export_csv(username: str = Query(...), labels: str = Query("")) ->
     items = _collect_export_items(username, labels)
     rows = ["type,iid,project_id,title,state,web_url,labels,assignee,updated_at"]
     for it in items:
-        rows.append(",".join([
-            it.type,
-            str(it.iid),
-            str(it.project_id),
-            f'"{it.title.replace(chr(34), chr(34) + chr(34))}"',
-            it.state,
-            it.web_url,
-            f'"{"|".join(it.labels)}"',
-            it.assignee or "",
-            it.updated_at,
-        ]))
+        rows.append(
+            ",".join(
+                [
+                    it.type,
+                    str(it.iid),
+                    str(it.project_id),
+                    f'"{it.title.replace(chr(34), chr(34) + chr(34))}"',
+                    it.state,
+                    it.web_url,
+                    f'"{"|".join(it.labels)}"',
+                    it.assignee or "",
+                    it.updated_at,
+                ]
+            )
+        )
     body = "\n".join(rows) + "\n"
     return Response(
         content=body,
@@ -674,12 +681,18 @@ async def api_export_md(username: str = Query(...), labels: str = Query("")) -> 
     def render_section(title: str, lst: list[IssueRef]) -> str:
         if not lst:
             return f"## {title}\n\n_无_\n"
-        lines = [f"## {title} ({len(lst)})\n", "| IID | Title | State | Labels | Updated |", "|---|---|---|---|---|"]
+        lines = [
+            f"## {title} ({len(lst)})\n",
+            "| IID | Title | State | Labels | Updated |",
+            "|---|---|---|---|---|",
+        ]
         for it in sorted(lst, key=lambda x: (x.project_id, x.iid)):
-            iid = f'!{it.iid}' if it.type == 'merge_request' else f'#{it.iid}'
-            title_cell = f'[{it.title}]({it.web_url})' if it.web_url else it.title
-            labels_cell = ", ".join(f'{lb}' for lb in it.labels[:5])
-            lines.append(f"| {iid} | {title_cell} | {it.state} | {labels_cell} | {it.updated_at[:10]} |")
+            iid = f"!{it.iid}" if it.type == "merge_request" else f"#{it.iid}"
+            title_cell = f"[{it.title}]({it.web_url})" if it.web_url else it.title
+            labels_cell = ", ".join(f"{lb}" for lb in it.labels[:5])
+            lines.append(
+                f"| {iid} | {title_cell} | {it.state} | {labels_cell} | {it.updated_at[:10]} |"
+            )
         return "\n".join(lines) + "\n"
 
     body = (
