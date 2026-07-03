@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1001,
+    "body": "Looping in @alice on this one",
+    "author": {
+      "id": 11,
+      "username": "bob",
+      "name": "Bob"
+    },
+    "created_at": "2026-07-03T08:30:00.000Z",
+    "updated_at": "2026-07-03T08:30:00.000Z",
+    "system": false
+  }
+]

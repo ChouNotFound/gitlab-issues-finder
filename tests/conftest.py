@@ -34,17 +34,26 @@ def _disable_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _disable_extra_dimensions(monkeypatch: pytest.MonkeyPatch) -> None:
-    """默认让新增维度 (subscribed / reaction / 多 assignee id) 走空响应。
+    """默认让新增维度 (subscribed / reaction / 多 assignee id / issue low-threshold) 走空响应。
 
-    旧测试用 responses 库只注册了 7 个原维度端点，没有为新维度注册。
+    旧测试用 responses 库只注册了少量原维度端点，没有为新增维度注册。
     缺省把新维度置空可让旧测试照常跑；专门测新维度的测试用本地 monkeypatch 覆盖。
     """
     from gitlab_issues_finder import app as app_module
 
     monkeypatch.setattr(app_module, "resolve_user_ids", lambda gl, username, **kw: [])
     monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+    monkeypatch.setattr(app_module, "fetch_issue_low_threshold_items", lambda *a, **kw: ([], []))
     monkeypatch.setattr(app_module, "fetch_subscribed", lambda *a, **kw: [])
     monkeypatch.setattr(app_module, "fetch_reacted", lambda *a, **kw: [])
+
+
+@pytest.fixture(autouse=True)
+def _clear_user_items_cache_fixture() -> None:
+    """每个测试前清掉进程内短 TTL 缓存，避免串测。"""
+    from gitlab_issues_finder import app as app_module
+
+    app_module._clear_user_items_cache()
 
 
 @pytest.fixture

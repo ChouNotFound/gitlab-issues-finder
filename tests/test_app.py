@@ -27,7 +27,7 @@ class TestStatRowAndDimensions:
 
     @responses.activate
     def test_summary_has_by_relation_counts(self, client, monkeypatch, tmp_db):
-        """summary 应包含 by_relation_counts 字段，且覆盖 5 issues + 6 mrs 维度。"""
+        """summary 应包含 by_relation_counts 字段，且覆盖 5 issues + 3 mrs 维度。"""
         from gitlab_issues_finder import app as app_module
 
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
@@ -42,13 +42,13 @@ class TestStatRowAndDimensions:
         monkeypatch.setattr(
             app_module, "fetch_items_by_user_id", lambda *a, **kw: []
         )
-        # 3 issue relations + 4 MR relations
+        # 3 issue relations + 1 MR relation
         for _ in range(3):
             responses.add(
                 responses.GET, f"{API_BASE}/issues", json=[], status=200,
                 match_querystring=False,
             )
-        for _ in range(4):
+        for _ in range(1):
             responses.add(
                 responses.GET, f"{API_BASE}/merge_requests", json=[],
                 status=200, match_querystring=False,
@@ -86,7 +86,7 @@ class TestStatRowAndDimensions:
 
         iss, kr1 = make_ref(1, 1, ["assignee", EXTRA_SUBSCRIBED], kind="issue")
         iss2, kr2 = make_ref(1, 2, ["mention"], kind="issue")
-        mr, kr3 = make_ref(2, 1, ["reviewer", "assignee", EXTRA_REACTION], kind="merge_request")
+        mr, kr3 = make_ref(2, 1, ["assignee", EXTRA_REACTION], kind="merge_request")
         all_items = [iss, iss2, mr]
         key_to_reasons = {}
         for d in (kr1, kr2, kr3):
@@ -102,7 +102,6 @@ class TestStatRowAndDimensions:
         assert counts["issues"][EXTRA_REACTION] == 0
         # mr 维度
         assert counts["mrs"]["assignee"] == 1
-        assert counts["mrs"]["reviewer"] == 1
         assert counts["mrs"][EXTRA_REACTION] == 1
         assert counts["mrs"][EXTRA_SUBSCRIBED] == 0
 
@@ -115,16 +114,16 @@ class TestStatRowAndDimensions:
         assert s["by_relation_counts"]["issues"]["assignee"] == 0
         assert s["by_relation_counts"]["issues"][EXTRA_SUBSCRIBED] == 0
         assert s["by_relation_counts"]["issues"][EXTRA_REACTION] == 0
-        assert s["by_relation_counts"]["mrs"]["reviewer"] == 0
+        assert s["by_relation_counts"]["mrs"]["assignee"] == 0
         assert s["by_relation_counts"]["mrs"][EXTRA_SUBSCRIBED] == 0
         assert s["by_relation_counts"]["mrs"][EXTRA_REACTION] == 0
 
     @responses.activate
     def test_stat_row_renders_in_summary_view(self, client, monkeypatch, tmp_db):
-        """summary 视图应在顶部渲染 stat-row，包含 5 issue + 6 mr 共 11 个 stat-pill。"""
+        """summary 视图应在顶部渲染 stat-row，包含 5 issue + 3 mr 共 8 个 stat-pill。"""
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
-        # Make 3 issue + 4 MR + subscribed + reacted work
+        # Make 3 issue + 1 MR + subscribed + reacted work
         from gitlab_issues_finder import app as app_module
         monkeypatch.setattr(app_module, "resolve_user_ids", lambda gl, username, **kw: [])
         # Inject a non-empty subscribed/reacted to exercise the stat row
@@ -148,7 +147,7 @@ class TestStatRowAndDimensions:
                 responses.GET, f"{API_BASE}/issues", json=[], status=200,
                 match_querystring=False,
             )
-        for _ in range(4):
+        for _ in range(1):
             responses.add(
                 responses.GET, f"{API_BASE}/merge_requests", json=[],
                 status=200, match_querystring=False,
@@ -156,22 +155,21 @@ class TestStatRowAndDimensions:
         r = client.get("/board?username=alice&view=summary")
         assert r.status_code == 200
         assert "stat-row" in r.text
-        # stat-pill rendered 5 + 6 = 11 times
-        assert r.text.count("stat-pill stat-pill-") == 11
+        # stat-pill rendered 5 + 3 = 8 times
+        assert r.text.count("stat-pill stat-pill-") == 8
         # Issue / MR group labels
         assert "Issues" in r.text
         assert "Merge Requests" in r.text
 
     def test_stat_keys_constants_shape(self):
         from gitlab_issues_finder.app import ISSUE_STAT_KEYS, MR_STAT_KEYS
-        # 5 issue, 6 mr
+        # 5 issue, 3 mr
         assert len(ISSUE_STAT_KEYS) == 5
-        assert len(MR_STAT_KEYS) == 6
+        assert len(MR_STAT_KEYS) == 3
         # keys are the reason strings
         for k, _label, _icon in ISSUE_STAT_KEYS:
             assert isinstance(k, str)
-        # MR has the extra "reviewer" key
-        assert any(k == "reviewer" for k, _, _ in MR_STAT_KEYS)
+        assert [k for k, _, _ in MR_STAT_KEYS] == ["assignee", "subscribed", "reaction"]
 
 
 class TestIndexRoute:
@@ -262,8 +260,98 @@ class TestSearchRoute:
         assert "未找到" in resp.text
 
     @responses.activate
+    def test_search_includes_reply_only_issue_as_other(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.models import IssueRef
+
+        reply_only = IssueRef.from_api(
+            {
+                "project_id": 301,
+                "iid": 55,
+                "title": "Reply Only Issue",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gl/reply-only",
+                "updated_at": "2026-07-03T00:00:00Z",
+            },
+            type="issue",
+        )
+        monkeypatch.setattr(app_module, "fetch_issue_low_threshold_items", lambda *a, **kw: ([], [reply_only]))
+
+        for _ in range(3):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/merge_requests",
+            json=[],
+            status=200,
+            match_querystring=False,
+        )
+
+        resp = client.post("/search", data={"username": "alice"})
+        assert resp.status_code == 200
+        assert "Reply Only Issue" in resp.text
+        assert "reason-comment" not in resp.text
+
+    @responses.activate
+    def test_search_includes_low_threshold_mention_issue(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.models import IssueRef
+
+        mention_issue = IssueRef.from_api(
+            {
+                "project_id": 302,
+                "iid": 56,
+                "title": "Mentioned In Notes",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gl/mentioned",
+                "updated_at": "2026-07-03T00:00:00Z",
+            },
+            type="issue",
+        )
+        monkeypatch.setattr(
+            app_module,
+            "fetch_issue_low_threshold_items",
+            lambda *a, **kw: ([mention_issue], []),
+        )
+
+        for _ in range(3):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/merge_requests",
+            json=[],
+            status=200,
+            match_querystring=False,
+        )
+
+        resp = client.post("/search", data={"username": "alice"})
+        assert resp.status_code == 200
+        assert "Mentioned In Notes" in resp.text
+        assert "reason-mention" in resp.text
+
+    @responses.activate
     def test_search_minimal_endpoints_when_no_labels(self, client, monkeypatch, tmp_db):
-        """不传 labels 时只触发参与维度的 7 个端点；labels 维度不触发。"""
+        """不传 labels 时只触发 3 个 issue 维度 + 1 个 MR 维度；labels 维度不触发。"""
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         for _ in range(3):
@@ -274,7 +362,7 @@ class TestSearchRoute:
                 status=200,
                 match_querystring=False,
             )
-        for _ in range(4):
+        for _ in range(1):
             responses.add(
                 responses.GET,
                 f"{API_BASE}/merge_requests",
@@ -288,7 +376,7 @@ class TestSearchRoute:
         issue_urls = [u for u in urls if u.path == "/api/v4/issues"]
         mr_urls = [u for u in urls if u.path == "/api/v4/merge_requests"]
         assert len(issue_urls) >= 3
-        assert len(mr_urls) >= 4
+        assert len(mr_urls) >= 1
         for u in urls:
             assert "labels=" not in u.query, f"labels query fired: {u.query}"
 
@@ -369,8 +457,14 @@ class TestSearchRoute:
         assert "出错了" in resp.text or "请输入" in resp.text
 
     def test_missing_token_returns_config_error(self, client, monkeypatch, tmp_db):
-        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
-        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.errors import ConfigError
+
+        monkeypatch.setattr(
+            app_module.AppConfig,
+            "from_env",
+            classmethod(lambda cls: (_ for _ in ()).throw(ConfigError("GITLAB_TOKEN 未设置"))),
+        )
         resp = client.post("/search", data={"username": "alice"})
         assert resp.status_code == 200
         assert "GITLAB_TOKEN" in resp.text
@@ -425,23 +519,11 @@ class TestBoardRoute:
         assert "需我审查" not in resp.text
 
     @responses.activate
-    def test_board_buckets_mrs_by_relation(self, client, monkeypatch, tmp_db):
-        """4 个 MR 分别匹配 reviewer/assignee/mention/author，应进入对应视图。"""
+    def test_board_only_keeps_assignee_mrs(self, client, monkeypatch, tmp_db):
+        """MR 仅 assignee 命中时才进入结果，其它 relation-only MR 不应出现。"""
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
 
-        reviewer_mr = [
-            {
-                "project_id": 1,
-                "iid": 11,
-                "title": "Reviewer MR",
-                "state": "opened",
-                "labels": [],
-                "assignee": None,
-                "web_url": "https://gl/proj1/-/merge_requests/11",
-                "updated_at": "2026-07-02T10:00:00Z",
-            }
-        ]
         assignee_mr = [
             {
                 "project_id": 2,
@@ -454,33 +536,8 @@ class TestBoardRoute:
                 "updated_at": "2026-07-02T10:00:00Z",
             }
         ]
-        mention_mr = [
-            {
-                "project_id": 3,
-                "iid": 33,
-                "title": "Mention MR",
-                "state": "opened",
-                "labels": [],
-                "assignee": None,
-                "web_url": "https://gl/proj3/-/merge_requests/33",
-                "updated_at": "2026-07-02T10:00:00Z",
-            }
-        ]
-        author_mr = [
-            {
-                "project_id": 4,
-                "iid": 44,
-                "title": "Author MR",
-                "state": "opened",
-                "labels": [],
-                "assignee": None,
-                "web_url": "https://gl/proj4/-/merge_requests/44",
-                "updated_at": "2026-07-02T10:00:00Z",
-            }
-        ]
 
-        # 默认视图 + relation 视图各需要 7 个 MR 维度查询（每次 request 都重新拉）
-        for _ in range(7):
+        for _ in range(3):
             responses.add(
                 responses.GET,
                 f"{API_BASE}/issues",
@@ -488,11 +545,11 @@ class TestBoardRoute:
                 status=200,
                 match_querystring=False,
             )
-        for payload in (assignee_mr, mention_mr, author_mr, reviewer_mr) * 2:
+        for _ in range(2):
             responses.add(
                 responses.GET,
                 f"{API_BASE}/merge_requests",
-                json=payload,
+                json=assignee_mr,
                 status=200,
                 match_querystring=False,
             )
@@ -500,8 +557,9 @@ class TestBoardRoute:
         # 默认综述视图
         resp = client.get("/board?username=alice")
         assert resp.status_code == 200
-        for t in ["Reviewer MR", "Assignee MR", "Mention MR", "Author MR"]:
-            assert t in resp.text, f"missing MR (summary): {t}"
+        assert "Assignee MR" in resp.text
+        for t in ["Reviewer MR", "Mention MR", "Author MR"]:
+            assert t not in resp.text, f"unexpected MR (summary): {t}"
         assert "总 Items" in resp.text
         assert "涉及项目" in resp.text
         assert "最近更新" in resp.text
@@ -512,11 +570,12 @@ class TestBoardRoute:
         assert "dragstart" in resp.text
         for rel in ["需我审查", "需我动", "@我的", "我创建的", "其他参与"]:
             assert rel in resp.text, f"missing column: {rel}"
-        for t in ["Reviewer MR", "Assignee MR", "Mention MR", "Author MR"]:
-            assert t in resp.text, f"missing MR (relation view): {t}"
+        assert "Assignee MR" in resp.text
+        for t in ["Reviewer MR", "Mention MR", "Author MR"]:
+            assert t not in resp.text, f"unexpected MR (relation view): {t}"
 
     def test_board_calls_4_mr_queries(self, client, monkeypatch, tmp_db):
-        """username 非空时应触发 3 issue + 4 MR = 7 次 fetch_items 调用。"""
+        """username 非空时应触发 3 issue + 1 MR = 4 次 fetch_items 调用。"""
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
 
@@ -532,9 +591,38 @@ class TestBoardRoute:
 
         resp = client.get("/board?username=alice")
         assert resp.status_code == 200
-        # /board 路径下 summary/all/issues/mrs 视图各拉一次完整 7 维度，
-        # 实际取决于 view 参数；默认 summary 触发 7 次 (3 issue + 4 MR)。
-        assert calls["count"] == 7
+        assert calls["count"] == 4
+
+    def test_board_view_switch_reuses_short_ttl_cache(self, client, monkeypatch, tmp_db):
+        """同一用户短时间切换视图时不应重复拉 GitLab。"""
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        from gitlab_issues_finder import app as app_module
+
+        counters = {"fetch_items": 0, "low_threshold": 0}
+
+        def fake_fetch_items(*args, **kwargs):
+            counters["fetch_items"] += 1
+            return []
+
+        def fake_low_threshold(*args, **kwargs):
+            counters["low_threshold"] += 1
+            return ([], [])
+
+        monkeypatch.setattr(app_module, "fetch_items", fake_fetch_items)
+        monkeypatch.setattr(app_module, "fetch_issue_low_threshold_items", fake_low_threshold)
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_subscribed", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_reacted", lambda *a, **kw: [])
+
+        r1 = client.get("/board?username=alice&view=summary")
+        r2 = client.get("/board?username=alice&view=relation")
+
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert counters["fetch_items"] == 4
+        assert counters["low_threshold"] == 1
 
 
 class TestBoardApi:
@@ -704,21 +792,21 @@ class TestSystemEndpoints:
         assert data["checks"]["config"]["ok"] is True
 
     def test_health_degraded_without_config(self, client, tmp_db):
-        # tmp_db 仍设了 DB_PATH；但删掉 GITLAB_URL/TOKEN 让 config 失败
-        import pytest
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.errors import ConfigError
 
-        m = pytest.MonkeyPatch()
-        m.delenv("GITLAB_URL", raising=False)
-        m.delenv("GITLAB_TOKEN", raising=False)
-        try:
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(
+                app_module.AppConfig,
+                "from_env",
+                classmethod(lambda cls: (_ for _ in ()).throw(ConfigError("missing config"))),
+            )
             r = client.get("/api/health")
             assert r.status_code == 200
             data = r.json()
             assert data["status"] == "degraded"
             assert data["checks"]["config"]["ok"] is False
             assert data["checks"]["db"]["ok"] is True
-        finally:
-            m.undo()
 
 
 class TestExportEndpoints:
@@ -1191,7 +1279,7 @@ class TestPreviewEndpoint:
         assert data["item_key"] == "issue-1-7"
         assert len(data["available_columns"]) == 5
 
-    def test_preview_reviewer_priority(self, client, tmp_db):
+    def test_preview_merge_request_non_assignee_goes_other(self, client, tmp_db):
         r = client.post(
             "/api/preview",
             json={
@@ -1201,7 +1289,7 @@ class TestPreviewEndpoint:
             },
         )
         assert r.status_code == 200
-        assert r.json()["default_column"] == "reviewer"
+        assert r.json()["default_column"] == "other"
 
     def test_preview_other_when_no_specific_match(self, client, tmp_db):
         r = client.post(

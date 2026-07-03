@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1002,
+    "body": "I am looking into it",
+    "author": {
+      "id": 12,
+      "username": "alice",
+      "name": "Alice"
+    },
+    "created_at": "2026-07-03T09:30:00.000Z",
+    "updated_at": "2026-07-03T09:30:00.000Z",
+    "system": false
+  }
+]

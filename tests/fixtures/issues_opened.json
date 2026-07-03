@@ -1,0 +1,24 @@
+[
+  {
+    "project_id": 201,
+    "iid": 7,
+    "title": "General issue for alice",
+    "description": "Ping @alice for context",
+    "state": "opened",
+    "labels": ["triage"],
+    "assignee": null,
+    "web_url": "https://gitlab.example.com/group/proj3/-/issues/7",
+    "updated_at": "2026-07-03T08:00:00.000Z"
+  },
+  {
+    "project_id": 202,
+    "iid": 8,
+    "title": "Needs investigation",
+    "description": "No explicit mention here",
+    "state": "opened",
+    "labels": ["bug"],
+    "assignee": null,
+    "web_url": "https://gitlab.example.com/group/proj4/-/issues/8",
+    "updated_at": "2026-07-03T09:00:00.000Z"
+  }
+]

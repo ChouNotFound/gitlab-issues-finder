@@ -31,6 +31,17 @@ class TestParseSsl:
 
 
 class TestAppConfigFromEnv:
+    @staticmethod
+    def _disable_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+        from gitlab_issues_finder import config as config_module
+
+        class _NoDotenvAppSettings(config_module.AppSettings):
+            def __init__(self, **kwargs):
+                kwargs.setdefault("_env_file", None)
+                super().__init__(**kwargs)
+
+        monkeypatch.setattr(config_module, "AppSettings", _NoDotenvAppSettings)
+
     def test_minimal_required(self, fake_env):
         cfg = AppConfig.from_env()
         assert cfg.url == "https://gitlab.test"
@@ -47,11 +58,13 @@ class TestAppConfigFromEnv:
         assert cfg.url == "https://gitlab.test"
 
     def test_missing_url(self, clean_env, monkeypatch):
+        self._disable_dotenv(monkeypatch)
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         with pytest.raises(ConfigError, match="GITLAB_URL"):
             AppConfig.from_env()
 
     def test_missing_token(self, clean_env, monkeypatch):
+        self._disable_dotenv(monkeypatch)
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         with pytest.raises(ConfigError, match="GITLAB_TOKEN"):
             AppConfig.from_env()

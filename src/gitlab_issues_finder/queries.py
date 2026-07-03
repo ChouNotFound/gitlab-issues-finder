@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Iterator, Sequence
 from enum import Enum
 
@@ -272,6 +273,80 @@ def fetch_labeled(
         IssueRef.from_api(p, type=kind.type_name)
         for p in _iter_pages(gl, params, page_size, path=kind.path)
     ]
+
+
+def fetch_open_issues(
+    gl: gitlab.Gitlab,
+    page_size: int = 100,
+) -> list[dict]:
+    """拉取当前用户可访问范围内的全部 opened issues 原始 payload。
+
+    这里显式带 `scope=all`，避免 GitLab 默认只返回 `created_by_me`。
+    返回原始 dict 以便调用方同时检查 title / description / notes。
+    """
+    params = _make_params({"scope": "all"})
+    return list(_iter_pages(gl, params, page_size, path=ItemKind.ISSUE.path))
+
+
+def fetch_issue_notes(
+    gl: gitlab.Gitlab,
+    project_id: int,
+    issue_iid: int,
+    page_size: int = 100,
+) -> list[dict]:
+    """拉取指定 issue 的人工评论 notes。"""
+    path = f"/projects/{project_id}/issues/{issue_iid}/notes"
+    params = {
+        "activity_filter": "only_comments",
+        "sort": "asc",
+        "order_by": "updated_at",
+    }
+    return list(_iter_pages(gl, params, page_size, path=path))
+
+
+def _mention_regex(username: str) -> re.Pattern[str]:
+    escaped = re.escape(username)
+    return re.compile(rf"(?<![\w@])@{escaped}(?![\w.\-])", re.IGNORECASE)
+
+
+def fetch_issue_low_threshold_items(
+    gl: gitlab.Gitlab,
+    username: str,
+    page_size: int = 100,
+) -> tuple[list[IssueRef], list[IssueRef]]:
+    """补齐 Issue 的低门槛参与定义。
+
+    返回 `(mentioned_items, replied_items)`：
+      - mentioned_items: 在 title / description / notes 中显式 @ 到 username
+      - replied_items: 存在该 username 的至少一条非 system note
+    """
+    if not username:
+        return [], []
+
+    mention_re = _mention_regex(username)
+    mentioned: list[IssueRef] = []
+    replied: list[IssueRef] = []
+    for payload in fetch_open_issues(gl, page_size):
+        ref = IssueRef.from_api(payload, type=ItemKind.ISSUE.type_name)
+        title = str(payload.get("title", ""))
+        description = str(payload.get("description", ""))
+        matched_mention = bool(mention_re.search(title) or mention_re.search(description))
+        matched_reply = False
+
+        for note in fetch_issue_notes(gl, ref.project_id, ref.iid, page_size):
+            body = str(note.get("body", ""))
+            if mention_re.search(body):
+                matched_mention = True
+            author = note.get("author") or {}
+            if not note.get("system") and author.get("username") == username:
+                matched_reply = True
+
+        if matched_mention:
+            mentioned.append(ref)
+        if matched_reply:
+            replied.append(ref)
+
+    return mentioned, replied
 
 
 def fetch_users(gl: gitlab.Gitlab, page_size: int = 100, max_total: int = 200) -> list[dict]:

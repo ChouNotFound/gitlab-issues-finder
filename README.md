@@ -6,7 +6,7 @@
 
 ## ✨ 特性
 
-- 🔍 **多维筛选**：assignee / mention / author / reviewer / subscribed / reaction 维度同时拉取，多 assignee / reviewer 走 user_id 补齐
+- 🔍 **参与度统计更贴近实际**：Issue 支持 assignee / mention / author / reply 低门槛参与；MR 只统计 assignee；subscribed / reaction 维度继续保留
 - 🏷️ **自选标签**：逗号分隔多标签，AND 关系精确过滤
 - 🗂️ **看板视图**：5 列 Kanban + 自定义列、拖拽改分桶、列名可改、列可删可加、列可重排
 - 🔍 **看板内搜索**：标题实时搜索 + 5 种排序（更新/IID/标题）
@@ -76,7 +76,7 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 - IID + 所属项目（`#42 p101`）
 - 标题（点击跳到 GitLab）
 - 状态徽章
-- **命中维度标签**：assignee / mention / author / reviewer / label
+- **命中维度标签**：assignee / mention / author / label
 - Labels / Assignee / Updated
 
 ### 看板视图（`/board?username=X`）
@@ -85,11 +85,11 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 
 | 列 | 命中条件 |
 |---|---|
-| 需我审查 | `reviewer_username=X` |
+| 需我审查 | 当前保留为空列（兼容旧看板布局） |
 | 需我动 | `assignee_username=X` |
 | @我的 | `mention_username=X` |
 | 我创建的 | `author_username=X` |
-| 其他参与 | 兜底（未匹配上述任一维度；subscribed / reaction 命中项也落这里） |
+| 其他参与 | 兜底（Issue reply-only、subscribed / reaction 命中项等落这里） |
 
 **特性**：
 - 拖拽卡片到任意列 → 立即持久化到 SQLite
@@ -149,7 +149,7 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 
 ## 🔑 Token 与 username 的关系
 
-仓库按 `username` 拉取 assignee / mention / author / reviewer / labels 5 个维度；这些都是「以 username 为查询参数」的接口，与 Token 持有者身份无关。
+仓库按 `username` 拉取 Issue 的 assignee / mention / author，并补扫 opened issues 的标题、描述和评论来识别 `@username` 与“本人回复”；MR 只按 assignee 统计。除 subscribed / reaction 外，这些都是以 username 为口径的只读查询。
 
 但 GitLab API 中 `subscribed` 和 `my_reaction_emoji` 这两个参数是**以 Token 持有者为口径**的——即 `?subscribed=true` 返回的是当前 Token 持有者订阅的 items，与查询里填的 `username` 解耦。所以：
 

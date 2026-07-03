@@ -30,7 +30,7 @@ from pathlib import Path
 
 import gitlab
 from fastapi import Body, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -51,6 +51,7 @@ from gitlab_issues_finder.queries import (
     ItemKind,
     Relation,
     dedupe,
+    fetch_issue_low_threshold_items,
     fetch_items,
     fetch_items_by_user_id,
     fetch_labeled,
@@ -89,7 +90,7 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="GitLab Status Board",
-    description="Personal tool for a self-hosted GitLab: pull all issues and merge requests related to a username across the assignee / mention / author / reviewer dimensions, render as a Kanban board, export to CSV / Markdown.",
+    description="Personal tool for a self-hosted GitLab: pull issues related to a username across assignee / mention / author / reply dimensions, keep merge requests scoped to assignee, render as a Kanban board, and export to CSV / Markdown.",
     lifespan=_lifespan,
     openapi_tags=[
         {"name": "UI", "description": "Server-rendered HTML pages."},
@@ -102,6 +103,12 @@ app = FastAPI(
         {"name": "System", "description": "Version, health, and diagnostics."},
     ],
 )
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> RedirectResponse:
+    """避免浏览器默认请求 favicon 时产生无意义 404。"""
+    return RedirectResponse(url="/static/favicon.svg", status_code=307)
 
 
 class _RateLimitMiddleware(BaseHTTPMiddleware):
@@ -196,12 +203,52 @@ ISSUE_STAT_KEYS: list[tuple[str, str, str]] = [
 ]
 MR_STAT_KEYS: list[tuple[str, str, str]] = [
     ("assignee", "指派给我", "🟦"),
-    ("mention", "@我", "💬"),
-    ("author", "我创建", "✏️"),
-    ("reviewer", "审查我", "👀"),
     (EXTRA_SUBSCRIBED, "我订阅", "🔔"),
     (EXTRA_REACTION, "我反应", "👍"),
 ]
+
+_USER_ITEMS_CACHE_TTL_SECONDS = 30.0
+_USER_ITEMS_CACHE: dict[tuple, tuple[float, dict]] = {}
+
+
+def _relation_priority_for_type(item_type: str) -> tuple[str, ...]:
+    """按 item 类型返回默认分桶优先级。"""
+    if item_type == "merge_request":
+        return ("assignee",)
+    return ("assignee", "mention", "author")
+
+
+def _clone_loaded_items(loaded: dict) -> dict:
+    """复制缓存结果，避免后续调用方意外修改共享结构。"""
+    return {
+        "all_items": list(loaded["all_items"]),
+        "issue_lists": {k: list(v) for k, v in loaded["issue_lists"].items()},
+        "mr_lists": {k: list(v) for k, v in loaded["mr_lists"].items()},
+        "subscribed": list(loaded["subscribed"]),
+        "reacted": list(loaded["reacted"]),
+        "key_to_reasons": {k: list(v) for k, v in loaded["key_to_reasons"].items()},
+    }
+
+
+def _cache_key_for_user_items(
+    gl,
+    username: str,
+    page_size: int,
+    label_list: list[str],
+    reaction_emoji: str,
+) -> tuple:
+    return (
+        getattr(gl, "url", ""),
+        username,
+        page_size,
+        tuple(label_list),
+        reaction_emoji,
+    )
+
+
+def _clear_user_items_cache() -> None:
+    """测试辅助：清空用户 items 短时缓存。"""
+    _USER_ITEMS_CACHE.clear()
 
 
 # ----- 数据装配 helper -----
@@ -215,11 +262,12 @@ def _load_user_items(
     """一站式拉取与 username 相关的所有 items 及 reason 标签。
 
     覆盖维度：
-      1. 标准 4 类关系 (issue: 3, MR: 4) —— 按 username
-      2. 多 assignee / 多 reviewer —— 按 user_id (补齐 GitLab 13+ 场景)
-      3. subscribed (Token 持有者)
-      4. reaction (Token 持有者，可指定 emoji)
-      5. labels AND 过滤 (可选)
+      1. Issue: assignee / mention / author + mention/reply 补充
+      2. MR: assignee
+      3. 多 assignee —— 按 user_id (补齐 GitLab 13+ 场景)
+      4. subscribed (Token 持有者)
+      5. reaction (Token 持有者，可指定 emoji)
+      6. labels AND 过滤 (可选)
 
     返回 dict，键：
       - all_items: 去重后的全集 (包含 labels 命中的项)
@@ -228,56 +276,60 @@ def _load_user_items(
       - key_to_reasons: {(type, project_id, iid): [reason, ...]}
     """
     label_list = list(label_list or [])
+    cache_key = _cache_key_for_user_items(gl, username, page_size, label_list, reaction_emoji)
+    now = time.monotonic()
+    cached = _USER_ITEMS_CACHE.get(cache_key)
+    if cached and now - cached[0] < _USER_ITEMS_CACHE_TTL_SECONDS:
+        return _clone_loaded_items(cached[1])
 
     # ---- 1) username-based 拉取 ----
     issue_lists: dict[str, list[IssueRef]] = {
-        rel.value: list(
-            fetch_items(gl, username, rel, ItemKind.ISSUE, page_size)
-        )
-        for rel in (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR)
+        "assignee": list(fetch_items(gl, username, Relation.ASSIGNEE, ItemKind.ISSUE, page_size)),
+        "mention": list(fetch_items(gl, username, Relation.MENTION, ItemKind.ISSUE, page_size)),
+        "author": list(fetch_items(gl, username, Relation.AUTHOR, ItemKind.ISSUE, page_size)),
     }
     mr_lists: dict[str, list[IssueRef]] = {
-        rel.value: list(
-            fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, page_size)
-        )
-        for rel in (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR, Relation.REVIEWER)
+        "assignee": list(
+            fetch_items(gl, username, Relation.ASSIGNEE, ItemKind.MERGE_REQUEST, page_size)
+        ),
     }
 
-    # ---- 2) 多 assignee / reviewer (按 user_id) ----
+    # ---- 2) Issue mention/reply 补充 ----
+    mentioned_issues, replied_issues = fetch_issue_low_threshold_items(gl, username, page_size)
+    issue_lists["mention"] = dedupe(
+        issue_lists["mention"],
+        mentioned_issues,
+    )
+
+    # ---- 3) 多 assignee (按 user_id) ----
     user_ids = resolve_user_ids(gl, username)
     if user_ids:
-        issue_lists[Relation.ASSIGNEE.value] = dedupe(
-            issue_lists[Relation.ASSIGNEE.value],
+        issue_lists["assignee"] = dedupe(
+            issue_lists["assignee"],
             fetch_items_by_user_id(
                 gl, user_ids, Relation.ASSIGNEE, ItemKind.ISSUE, page_size
             ),
         )
-        mr_lists[Relation.ASSIGNEE.value] = dedupe(
-            mr_lists[Relation.ASSIGNEE.value],
+        mr_lists["assignee"] = dedupe(
+            mr_lists["assignee"],
             fetch_items_by_user_id(
                 gl, user_ids, Relation.ASSIGNEE, ItemKind.MERGE_REQUEST, page_size
             ),
         )
-        mr_lists[Relation.REVIEWER.value] = dedupe(
-            mr_lists[Relation.REVIEWER.value],
-            fetch_items_by_user_id(
-                gl, user_ids, Relation.REVIEWER, ItemKind.MERGE_REQUEST, page_size
-            ),
-        )
 
-    # ---- 3) subscribed ----
+    # ---- 4) subscribed ----
     subscribed: list[IssueRef] = dedupe(
         fetch_subscribed(gl, ItemKind.ISSUE, page_size),
         fetch_subscribed(gl, ItemKind.MERGE_REQUEST, page_size),
     )
 
-    # ---- 4) reaction ----
+    # ---- 5) reaction ----
     reacted: list[IssueRef] = dedupe(
         fetch_reacted(gl, reaction_emoji, ItemKind.ISSUE, page_size),
         fetch_reacted(gl, reaction_emoji, ItemKind.MERGE_REQUEST, page_size),
     )
 
-    # ---- 5) labels (AND 关系) ----
+    # ---- 6) labels (AND 关系) ----
     issues_labeled: list[IssueRef] = []
     mrs_labeled: list[IssueRef] = []
     if label_list:
@@ -307,11 +359,12 @@ def _load_user_items(
         *mr_lists.values(),
         subscribed,
         reacted,
+        replied_issues,
         issues_labeled,
         mrs_labeled,
     )
 
-    return {
+    loaded = {
         "all_items": all_items,
         "issue_lists": issue_lists,
         "mr_lists": mr_lists,
@@ -319,6 +372,8 @@ def _load_user_items(
         "reacted": reacted,
         "key_to_reasons": key_to_reasons,
     }
+    _USER_ITEMS_CACHE[cache_key] = (now, _clone_loaded_items(loaded))
+    return loaded
 
 
 # ----- HTML 路由 -----
@@ -350,8 +405,9 @@ async def search(
     """查询与 username 相关的所有 opened issue / MR 并按类型分两段展示。
 
     参与维度（任一命中即算参与）：
-      - assignee_username / mention_username / author_username；
-      - MR 额外覆盖 reviewer_username；
+      - Issue：assignee_username / mention_username / author_username /
+        title-description-notes 中 @username / 本人回复；
+      - MR：assignee_username；
       - labels 是可选附加条件（AND 多标签）。
     """
     username = username.strip()
@@ -524,7 +580,7 @@ async def board(
     for item in all_items:
         reasons = key_to_reasons.get(item.key, [])
         placed = False
-        for rel in ("reviewer", "assignee", "mention", "author"):
+        for rel in _relation_priority_for_type(item.type):
             if rel in reasons:
                 items_by_rel[rel].append(item)
                 placed = True
@@ -555,7 +611,7 @@ async def board(
         # 默认分桶
         reasons = key_to_reasons.get(item.key, [])
         placed = False
-        for reason in ("reviewer", "assignee", "mention", "author"):
+        for reason in _relation_priority_for_type(item.type):
             if reason in reasons and reason in items_by_col:
                 items_by_col[reason].append(item)
                 placed = True
@@ -609,7 +665,7 @@ def _empty_summary() -> dict:
                 EXTRA_SUBSCRIBED: 0, EXTRA_REACTION: 0,
             },
             "mrs": {
-                "assignee": 0, "mention": 0, "author": 0, "reviewer": 0,
+                "assignee": 0,
                 EXTRA_SUBSCRIBED: 0, EXTRA_REACTION: 0,
             },
         },
@@ -641,7 +697,7 @@ def _compute_summary(
     for it in all_items:
         rs = key_to_reasons.get(it.key, [])
         placed = False
-        for rel in ("reviewer", "assignee", "mention", "author"):
+        for rel in _relation_priority_for_type(it.type):
             if rel in rs:
                 by_rel[rel] += 1
                 placed = True
@@ -1055,9 +1111,9 @@ async def api_preview(payload: dict = Body(...)) -> JSONResponse:
     dbp = _db_path()
     col_defs = storage.list_columns(dbp, username)
     col_ids = {c["id"] for c in col_defs}
-    # 默认分桶逻辑（与 /board 路由保持一致：reviewer/assignee/mention/author 优先，其他归 "other"）
+    # 默认分桶逻辑：Issue 走 assignee/mention/author，MR 只走 assignee，其余归 other。
     target = "other"
-    for cand in ("reviewer", "assignee", "mention", "author"):
+    for cand in _relation_priority_for_type(item_type):
         if cand in reasons and cand in col_ids:
             target = cand
             break

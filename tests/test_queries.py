@@ -18,9 +18,12 @@ from gitlab_issues_finder.queries import (
     ItemKind,
     Relation,
     dedupe,
+    fetch_issue_low_threshold_items,
+    fetch_issue_notes,
     fetch_items,
     fetch_items_by_user_id,
     fetch_labeled,
+    fetch_open_issues,
     fetch_reacted,
     fetch_subscribed,
     fetch_users,
@@ -172,6 +175,55 @@ class TestFetchLabeled:
         _add_paginated_endpoint(responses, "/issues", [[]])
         fetch_labeled(gl, ["bug", "priority::high"])
         _assert_query_param(responses.calls[-1].request.url, "labels", "bug,priority::high")
+
+
+class TestIssueLowThresholdQueries:
+    @responses.activate
+    def test_fetch_open_issues_uses_scope_all(self, gl):
+        _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_opened.json")])
+        result = fetch_open_issues(gl)
+        assert len(result) == 2
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs["scope"] == ["all"]
+        assert last_qs["state"] == ["opened"]
+        assert last_qs["with_membership"] == ["false"]
+
+    @responses.activate
+    def test_fetch_issue_notes_only_comments(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/201/issues/7/notes",
+            json=load_fixture("issue_notes_mentioned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        result = fetch_issue_notes(gl, 201, 7)
+        assert len(result) == 1
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs["activity_filter"] == ["only_comments"]
+        assert last_qs["sort"] == ["asc"]
+        assert last_qs["order_by"] == ["updated_at"]
+
+    @responses.activate
+    def test_fetch_issue_low_threshold_items(self, gl):
+        _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_opened.json")])
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/201/issues/7/notes",
+            json=load_fixture("issue_notes_mentioned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/202/issues/8/notes",
+            json=load_fixture("issue_notes_replied.json"),
+            status=200,
+            match_querystring=False,
+        )
+        mentioned, replied = fetch_issue_low_threshold_items(gl, "alice")
+        assert [(it.project_id, it.iid) for it in mentioned] == [(201, 7)]
+        assert [(it.project_id, it.iid) for it in replied] == [(202, 8)]
 
 
 class TestFetchMergeRequestsByLabels:
