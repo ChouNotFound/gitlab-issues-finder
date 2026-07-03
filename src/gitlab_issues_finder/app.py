@@ -781,6 +781,34 @@ async def api_metrics() -> Response:
     )
 
 
+@app.get("/api/routes", tags=["System"])
+async def api_routes() -> JSONResponse:
+    """返回所有已注册的 HTTP 路由（method + path + tags + name）。
+
+    供运维 / 调试做能力发现；不依赖 OpenAPI 文档。
+    """
+    routes: list[dict] = []
+    for r in app.routes:
+        methods = getattr(r, "methods", None)
+        path = getattr(r, "path", None)
+        if not methods or not path or path.startswith("/openapi"):
+            continue
+        # 跳过 HEAD（与 GET 重复）
+        ms = sorted(m for m in methods if m != "HEAD")
+        if not ms:
+            continue
+        routes.append(
+            {
+                "path": path,
+                "methods": ms,
+                "tags": getattr(r, "tags", []) or [],
+                "name": getattr(r, "name", None),
+            }
+        )
+    routes.sort(key=lambda r: (r["path"], r["methods"]))
+    return JSONResponse({"count": len(routes), "routes": routes})
+
+
 # ----- 分桶预览 -----
 @app.post("/api/preview", tags=["Board"])
 async def api_preview(payload: dict = Body(...)) -> JSONResponse:

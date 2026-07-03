@@ -1158,3 +1158,47 @@ class TestMeEndpoint:
         # The AppError handler renders the error page
         assert r.status_code == 200
         assert "认证失败" in r.text
+
+
+class TestRoutesEndpoint:
+    def test_routes_lists_all_endpoints(self, client, tmp_db):
+        r = client.get("/api/routes")
+        assert r.status_code == 200
+        data = r.json()
+        assert "count" in data
+        assert "routes" in data
+        assert data["count"] >= 20  # 至少 20 个路由
+        paths = {route["path"] for route in data["routes"]}
+        # 关键端点都列出
+        for expected in [
+            "/",
+            "/search",
+            "/board",
+            "/api/health",
+            "/api/version",
+            "/api/routes",
+            "/api/me",
+            "/api/users",
+            "/api/preview",
+            "/api/board/move",
+            "/api/board/columns",
+            "/api/board/columns/reorder",
+            "/api/export.csv",
+            "/api/export.md",
+            "/api/preferences",
+            "/metrics",
+        ]:
+            assert expected in paths, f"{expected} missing from /api/routes"
+
+    def test_routes_excludes_openapi(self, client, tmp_db):
+        r = client.get("/api/routes")
+        paths = {route["path"] for route in r.json()["routes"]}
+        assert not any(p.startswith("/openapi") for p in paths)
+
+    def test_routes_have_methods_and_tags(self, client, tmp_db):
+        r = client.get("/api/routes")
+        for route in r.json()["routes"]:
+            assert "methods" in route
+            assert "tags" in route
+            assert isinstance(route["methods"], list)
+            assert len(route["methods"]) >= 1

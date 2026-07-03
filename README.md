@@ -110,6 +110,7 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 | `GET`  | `/api/board/columns` | 查询某用户的列定义 |
 | `POST` | `/api/board/columns/reorder` | 重排列 `{username, column_ids: [...]}` |
 | `GET`  | `/api/metrics` | Prometheus 文本格式的进程指标 |
+| `GET`  | `/api/routes` | 所有已注册路由（method/path/tags） |
 | `POST` | `/api/preview` | 给定一个 item + 命中维度，预览默认会落进哪一列 |
 
 > 拖拽与列管理**仅本地**，不调任何 mutation API；看板始终只需 `read_api` Token。
