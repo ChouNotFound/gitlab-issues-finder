@@ -26,6 +26,12 @@ def fake_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITLAB_TOKEN", "glpat-test-token")
 
 
+@pytest.fixture(autouse=True)
+def _disable_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """每个测试前把速率限制关掉，避免 TestClient 的连续请求触发 429。"""
+    monkeypatch.setenv("RATE_LIMIT_RPM", "0")
+
+
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """清空所有相关环境变量，模拟全新环境。"""

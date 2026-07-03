@@ -753,6 +753,55 @@ async def api_metrics() -> Response:
     )
 
 
+# ----- 分桶预览 -----
+@app.post("/api/preview", tags=["Board"])
+async def api_preview(payload: dict = Body(...)) -> JSONResponse:
+    """给定一个 item（type/project_id/iid） + 一组命中关系，预测它会落在哪个列。
+
+    用于前端做"快速归档"对话框：用户粘贴 issue 链接，后端告诉前端
+    默认会落到哪一列（reviewer/assignee/mention/author/other），并展示
+    当前所有可用列，便于用户选一个。
+
+    payload:
+        {
+          "username": "alice",
+          "item": {"type": "issue", "project_id": 1, "iid": 7},
+          "reasons": ["assignee", "mention"]   // 命中维度
+        }
+    """
+    username = _validate_username(payload.get("username", ""))
+    if not username:
+        raise HTTPException(status_code=400, detail="missing username")
+    item = payload.get("item") or {}
+    item_type = item.get("type")
+    if item_type not in ("issue", "merge_request"):
+        raise HTTPException(status_code=400, detail="item.type must be 'issue' or 'merge_request'")
+    reasons = payload.get("reasons") or []
+    if not isinstance(reasons, list) or not all(isinstance(r, str) for r in reasons):
+        raise HTTPException(status_code=400, detail="reasons must be a list of strings")
+    dbp = _db_path()
+    col_defs = storage.list_columns(dbp, username)
+    col_ids = {c["id"] for c in col_defs}
+    # 默认分桶逻辑（与 /board 路由保持一致：reviewer/assignee/mention/author 优先，其他归 "other"）
+    target = "other"
+    for cand in ("reviewer", "assignee", "mention", "author"):
+        if cand in reasons and cand in col_ids:
+            target = cand
+            break
+    # 检查是否已被手动覆盖
+    item_key = f"{item_type}-{item.get('project_id')}-{item.get('iid')}"
+    overrides = storage.get_overrides(dbp, username)
+    manual = overrides.get(item_key)
+    return JSONResponse(
+        {
+            "item_key": item_key,
+            "default_column": target,
+            "current_override": manual,
+            "available_columns": col_defs,
+        }
+    )
+
+
 # ----- 数据导出 -----
 def _collect_export_items(username: str, labels_raw: str) -> list[IssueRef]:
     """复用 /search 的查询逻辑，组装导出用的 items 列表。

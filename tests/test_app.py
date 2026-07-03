@@ -1019,3 +1019,99 @@ class TestReorderColumns:
             json={"username": "alice", "column_ids": "not-a-list"},
         )
         assert r.status_code == 400
+
+
+class TestPreviewEndpoint:
+    def test_preview_basic_assignment(self, client, tmp_db):
+        r = client.post(
+            "/api/preview",
+            json={
+                "username": "alice",
+                "item": {"type": "issue", "project_id": 1, "iid": 7},
+                "reasons": ["assignee", "mention"],
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["default_column"] == "assignee"  # first match in priority order
+        assert data["current_override"] is None
+        assert data["item_key"] == "issue-1-7"
+        assert len(data["available_columns"]) == 5
+
+    def test_preview_reviewer_priority(self, client, tmp_db):
+        r = client.post(
+            "/api/preview",
+            json={
+                "username": "alice",
+                "item": {"type": "merge_request", "project_id": 2, "iid": 5},
+                "reasons": ["mention", "author", "reviewer"],
+            },
+        )
+        assert r.status_code == 200
+        assert r.json()["default_column"] == "reviewer"
+
+    def test_preview_other_when_no_specific_match(self, client, tmp_db):
+        r = client.post(
+            "/api/preview",
+            json={
+                "username": "alice",
+                "item": {"type": "issue", "project_id": 1, "iid": 7},
+                "reasons": [],  # no specific relation
+            },
+        )
+        assert r.status_code == 200
+        assert r.json()["default_column"] == "other"
+
+    def test_preview_reports_manual_override(self, client, tmp_db):
+        # First, set an override
+        client.post(
+            "/api/board/move",
+            json={
+                "username": "alice",
+                "item_key": "issue-1-7",
+                "column_id": "assignee",
+            },
+        )
+        r = client.post(
+            "/api/preview",
+            json={
+                "username": "alice",
+                "item": {"type": "issue", "project_id": 1, "iid": 7},
+                "reasons": ["mention"],
+            },
+        )
+        assert r.json()["current_override"] == "assignee"
+        # default is still mention (override doesn't change default)
+        assert r.json()["default_column"] == "mention"
+
+    def test_preview_invalid_type(self, client, tmp_db):
+        r = client.post(
+            "/api/preview",
+            json={
+                "username": "alice",
+                "item": {"type": "epic", "project_id": 1, "iid": 7},
+                "reasons": ["mention"],
+            },
+        )
+        assert r.status_code == 400
+
+    def test_preview_missing_username(self, client, tmp_db):
+        r = client.post(
+            "/api/preview",
+            json={
+                "item": {"type": "issue", "project_id": 1, "iid": 7},
+                "reasons": ["mention"],
+            },
+        )
+        assert r.status_code == 400
+
+    def test_preview_invalid_reasons(self, client, tmp_db):
+        r = client.post(
+            "/api/preview",
+            json={
+                "username": "alice",
+                "item": {"type": "issue", "project_id": 1, "iid": 7},
+                "reasons": "not-a-list",
+            },
+        )
+        assert r.status_code == 400
