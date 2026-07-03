@@ -95,7 +95,8 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 | `POST` | `/search` | 查询视图（form: `username`, `labels`, `since`, `until`） |
 | `GET` | `/board` | 看板视图（query: `username`, `view`, `q`, `since`, `until`） |
 | `GET` | `/api/users` | 活跃用户列表（首页自动补全） |
-| `GET` | `/api/me` | 当前配置 token 对应的 GitLab 用户信息 |
+| `GET` | `/api/me` |
+| `GET` | `/api/items` | JSON 版 /search：username + labels + since/until，返回 items 列表 | 当前配置 token 对应的 GitLab 用户信息 |
 | `GET` | `/api/recent-users` | 最近访问的用户 |
 | `POST` | `/api/board/move` | 拖拽覆盖 `{username, item_key, column_id}` |
 | `POST` | `/api/board/reset` | 清除某用户所有拖拽 |
