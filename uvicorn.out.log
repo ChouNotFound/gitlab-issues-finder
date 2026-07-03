@@ -1,7 +1,0 @@
-INFO:     127.0.0.1:52895 - "GET / HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57778 - "GET / HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57778 - "GET /static/style.css HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57778 - "GET /api/users HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49248 - "GET /favicon.ico HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:55235 - "POST /search HTTP/1.1" 200 OK
-INFO:     127.0.0.1:55302 - "GET / HTTP/1.1" 200 OK
