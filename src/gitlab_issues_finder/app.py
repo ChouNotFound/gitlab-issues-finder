@@ -35,6 +35,9 @@ from gitlab_issues_finder import storage
 from gitlab_issues_finder.client import build_client
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
+from gitlab_issues_finder.logging_setup import get_logger
+
+logger = get_logger(__name__)
 from gitlab_issues_finder.models import IssueRef
 from gitlab_issues_finder.queries import (
     ItemKind,
@@ -59,10 +62,11 @@ async def _lifespan(_app: FastAPI):
     try:
         cfg = AppConfig.from_env()
         storage.init_db(cfg.db_path)
-    except ConfigError:
-        pass
+        logger.info("startup ok", extra={"db_path": cfg.db_path, "gitlab_url": cfg.url})
+    except ConfigError as e:
+        logger.warning("startup config incomplete: %s", e)
     yield
-    # shutdown: 暂无需清理（SQLite 连接随用随关）
+    logger.info("shutdown")
 
 
 app = FastAPI(title="GitLab Status Board", lifespan=_lifespan)
@@ -127,6 +131,7 @@ async def search(
         return _render_error(request, "请输入有效的 GitLab 用户名", "输入为空")
 
     label_list = [s.strip() for s in labels.split(",") if s.strip()]
+    logger.info("search requested", extra={"username": username, "labels": label_list})
 
     cfg = AppConfig.from_env()
     gl = build_client(cfg)
@@ -152,6 +157,11 @@ async def search(
         *issue_lists.values(), *mr_lists.values(),
         issues_labeled, mrs_labeled,
     )
+    logger.info("search result", extra={
+        "username": username,
+        "issue_count": sum(1 for it in all_items if it.type == "issue"),
+        "mr_count": sum(1 for it in all_items if it.type == "merge_request"),
+    })
     issues = [it for it in all_items if it.type == "issue"]
     merge_requests = [it for it in all_items if it.type == "merge_request"]
 
@@ -272,6 +282,11 @@ async def board(
         *issue_lists.values(), *mr_lists.values(),
         issues_labeled, mrs_labeled,
     )
+    logger.info("search result", extra={
+        "username": username,
+        "issue_count": sum(1 for it in all_items if it.type == "issue"),
+        "mr_count": sum(1 for it in all_items if it.type == "merge_request"),
+    })
 
     # ---- 关键修复保证：搜索跨越多项目时不漏 ----
     # all_items 中保留的是 GitLab API 返回的实际项目 ID 集合
