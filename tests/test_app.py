@@ -1302,3 +1302,68 @@ class TestItemsEndpoint:
         r = client.get("/api/items", params={"username": "alice", "since": "garbage"})
         assert r.status_code == 400
         assert "since" in r.json()["detail"]
+
+
+class TestItemsPageSizeOverride:
+    @responses.activate
+    def test_page_size_query_param_passed_to_gitlab(self, client, monkeypatch, tmp_db):
+        """?page_size=10 应该让 fetch_items 用 10 而不是配置的 100。"""
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        for _ in range(3):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
+        for _ in range(4):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
+        r = client.get("/api/items", params={"username": "alice", "page_size": 10})
+        assert r.status_code == 200
+        # 验证 GitLab 调用带了 per_page=10
+        for call in responses.calls:
+            qs = parse_qs(urlparse(call.request.url).query)
+            if "per_page" in qs:
+                assert qs["per_page"] == ["10"], f"expected per_page=10, got {qs.get('per_page')}"
+
+    @responses.activate
+    def test_page_size_zero_uses_config_default(self, client, monkeypatch, tmp_db):
+        """?page_size=0 应该用配置的 PAGE_SIZE（默认 100）。"""
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        monkeypatch.setenv("PAGE_SIZE", "25")
+        for _ in range(3):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
+        for _ in range(4):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
+        r = client.get("/api/items", params={"username": "alice", "page_size": 0})
+        assert r.status_code == 200
+        for call in responses.calls:
+            qs = parse_qs(urlparse(call.request.url).query)
+            if "per_page" in qs:
+                assert qs["per_page"] == ["25"]  # 来自 PAGE_SIZE env
+
+    def test_page_size_too_large_rejected(self, client, tmp_db):
+        """>100 应该被 FastAPI 验证拒绝（422）。"""
+        r = client.get("/api/items", params={"username": "alice", "page_size": 200})
+        assert r.status_code == 422

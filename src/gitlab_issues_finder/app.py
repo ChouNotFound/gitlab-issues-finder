@@ -601,6 +601,7 @@ async def api_items(
     labels: str = Query("", description="逗号分隔的标签"),
     since: str = Query("", description="只看 updated_at >= 此日期 (YYYY-MM-DD)"),
     until: str = Query("", description="只看 updated_at <= 此日期 (YYYY-MM-DD)"),
+    page_size: int = Query(0, ge=0, le=100, description="覆盖 PAGE_SIZE（1-100）。0 = 用配置默认"),
 ) -> JSONResponse:
     """JSON 版 /search：返回 username 的所有 opened item 列表。
 
@@ -621,21 +622,22 @@ async def api_items(
     label_list = [s.strip() for s in labels.split(",") if s.strip()]
     cfg = AppConfig.from_env()
     gl = build_client(cfg)
+    effective_ps = page_size if page_size > 0 else cfg.page_size
     issue_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR)
     issue_lists: dict[str, list[IssueRef]] = {
-        rel.value: fetch_items(gl, username, rel, ItemKind.ISSUE, cfg.page_size)
+        rel.value: fetch_items(gl, username, rel, ItemKind.ISSUE, effective_ps)
         for rel in issue_relations
     }
     mr_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR, Relation.REVIEWER)
     mr_lists: dict[str, list[IssueRef]] = {
-        rel.value: fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, cfg.page_size)
+        rel.value: fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, effective_ps)
         for rel in mr_relations
     }
     issues_labeled: list[IssueRef] = []
     mrs_labeled: list[IssueRef] = []
     if label_list:
-        issues_labeled = fetch_labeled(gl, label_list, cfg.page_size)
-        mrs_labeled = fetch_labeled(gl, label_list, cfg.page_size, kind=ItemKind.MERGE_REQUEST)
+        issues_labeled = fetch_labeled(gl, label_list, effective_ps)
+        mrs_labeled = fetch_labeled(gl, label_list, effective_ps, kind=ItemKind.MERGE_REQUEST)
     all_items = dedupe(
         *issue_lists.values(),
         *mr_lists.values(),
