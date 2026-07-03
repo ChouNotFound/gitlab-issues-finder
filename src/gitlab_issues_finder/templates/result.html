@@ -59,7 +59,7 @@
                         <tbody>
                             {% for item, reasons in issues %}
                             <tr>
-                                <td><span class="num">#{{ item.iid }}</span><span class="cell-meta">p{{ item.project_id }}</span></td>
+                                <td><span class="num">#{{ item.iid }}</span><span class="cell-meta">p{{ item.project_id }}{% if project_info and project_info.get(item.project_id) %} <span class="project-name">{{ project_info[item.project_id].path_with_namespace }}</span>{% endif %}</span></td>
                                 <td class="cell-title">
                                     {% if item.web_url %}
                                         <a href="{{ item.web_url }}" target="_blank" rel="noopener">{{ item.title }}</a>
@@ -113,7 +113,7 @@
                         <tbody>
                             {% for item, reasons in merge_requests %}
                             <tr>
-                                <td><span class="num">!{{ item.iid }}</span><span class="cell-meta">p{{ item.project_id }}</span></td>
+                                <td><span class="num">!{{ item.iid }}</span><span class="cell-meta">p{{ item.project_id }}{% if project_info and project_info.get(item.project_id) %} <span class="project-name">{{ project_info[item.project_id].path_with_namespace }}</span>{% endif %}</span></td>
                                 <td class="cell-title">
                                     {% if item.web_url %}
                                         <a href="{{ item.web_url }}" target="_blank" rel="noopener">{{ item.title }}</a>

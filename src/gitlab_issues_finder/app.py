@@ -37,6 +37,7 @@ from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.logging_setup import get_logger
 from gitlab_issues_finder.models import IssueRef
+from gitlab_issues_finder.project_resolver import resolve as resolve_projects
 from gitlab_issues_finder.queries import (
     ItemKind,
     Relation,
@@ -160,6 +161,13 @@ async def search(
         issues_labeled,
         mrs_labeled,
     )
+    # 解析项目名（用于模板显示）
+    project_info: dict = {}
+    try:
+        dbp = _db_path()
+        project_info = resolve_projects(dbp, gl, {it.project_id for it in all_items})
+    except AppError:
+        pass
     logger.info(
         "search result",
         extra={
@@ -208,6 +216,7 @@ async def search(
             "total_count": len(issues) + len(merge_requests),
             "active_tab": "query",
             "theme": storage.get_theme(cfg.db_path, username),
+            "project_info": project_info,
         },
     )
 
@@ -248,6 +257,7 @@ async def board(
                 "active_tab": "board",
                 "theme": "auto",
                 "filter_q": "",
+                "project_info": {},
             },
         )
 
@@ -288,6 +298,13 @@ async def board(
         issues_labeled,
         mrs_labeled,
     )
+    # 解析项目名（用于模板显示）
+    board_project_info: dict = {}
+    try:
+        dbp = _db_path()
+        board_project_info = resolve_projects(dbp, gl, {it.project_id for it in all_items})
+    except AppError:
+        pass
     logger.info(
         "search result",
         extra={
@@ -378,6 +395,7 @@ async def board(
             "active_tab": "board",
             "theme": storage.get_theme(dbp, username),
             "filter_q": q,
+            "project_info": board_project_info,
         },
     )
 

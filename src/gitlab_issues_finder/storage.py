@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS user_prefs (
     theme       TEXT NOT NULL DEFAULT 'auto',  -- auto|light|dark
     last_seen   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS project_cache (
+    project_id          INTEGER PRIMARY KEY,
+    name                TEXT NOT NULL,
+    path_with_namespace TEXT NOT NULL,
+    fetched_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -228,3 +235,50 @@ def list_recent_users(db_path: str | Path, limit: int = 10) -> list[str]:
             (limit,),
         ).fetchall()
     return [r["username"] for r in rows]
+
+
+
+# ----- Project name cache -----
+def get_project(db_path: str | Path, project_id: int) -> dict | None:
+    """返回 {name, path_with_namespace} 或 None（未缓存）。"""
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT name, path_with_namespace, fetched_at FROM project_cache WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {"name": row["name"], "path_with_namespace": row["path_with_namespace"]}
+
+
+def upsert_project(
+    db_path: str | Path,
+    project_id: int,
+    name: str,
+    path_with_namespace: str,
+) -> None:
+    """写入或更新项目缓存。"""
+    with get_conn(db_path) as conn:
+        conn.execute(
+            """INSERT INTO project_cache(project_id, name, path_with_namespace)
+               VALUES (?, ?, ?)
+               ON CONFLICT(project_id) DO UPDATE SET
+                   name = excluded.name,
+                   path_with_namespace = excluded.path_with_namespace,
+                   fetched_at = CURRENT_TIMESTAMP""",
+            (project_id, name, path_with_namespace),
+        )
+
+
+def stale_projects(db_path: str | Path, max_age_seconds: int = 86400 * 7) -> list[int]:
+    """返回超过 max_age_seconds 未刷新的 project_id 列表（默认 7 天）。
+
+    用于后台清理 / 按需重新拉取。
+    """
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT project_id FROM project_cache WHERE "
+            "(julianday('now') - julianday(fetched_at)) * 86400 > ?",
+            (max_age_seconds,),
+        ).fetchall()
+    return [r["project_id"] for r in rows]

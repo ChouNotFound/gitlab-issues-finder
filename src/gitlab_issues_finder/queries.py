@@ -218,3 +218,39 @@ def fetch_merge_requests_by_labels(
     page_size=100,
 ):
     return fetch_labeled(gl, labels, kind=ItemKind.MERGE_REQUEST, page_size=page_size)
+
+
+def resolve_projects(
+    gl: gitlab.Gitlab,
+    project_ids: Iterable[int],
+    page_size: int = 100,
+) -> dict[int, dict]:
+    """按 project_id 批量拉取 {name, path_with_namespace}。
+
+    GitLab /projects/:id 单点拉取太慢，所以走 /projects?membership=false
+    + 客户端过滤。返回 {project_id: {name, path_with_namespace}}。
+    """
+    wanted = set(project_ids)
+    out: dict[int, dict] = {}
+    if not wanted:
+        return out
+    page = 1
+    while True:
+        chunk = safe_http_get(
+            gl,
+            "/projects",
+            **{"page": page, "per_page": page_size, "membership": "false"},
+        )
+        if not chunk:
+            break
+        for p in chunk:
+            pid = p.get("id")
+            if pid in wanted:
+                out[pid] = {
+                    "name": p.get("name", ""),
+                    "path_with_namespace": p.get("path_with_namespace", ""),
+                }
+        if len(out) >= len(wanted) or len(chunk) < page_size:
+            break
+        page += 1
+    return out

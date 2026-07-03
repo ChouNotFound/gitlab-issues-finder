@@ -650,3 +650,35 @@ class TestBoardFilterAndSort:
         assert r.status_code == 200
         assert 'id="card-filter"' not in r.text
         assert 'id="card-sort"' not in r.text
+
+
+class TestProjectNameDisplay:
+    @responses.activate
+    def test_search_renders_project_name(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv('GITLAB_URL', 'https://gitlab.test')
+        monkeypatch.setenv('GITLAB_TOKEN', 'x')
+        # Mock /issues to return one item
+        for _ in range(3):
+            responses.add(
+                responses.GET, f'{API_BASE}/issues',
+                json=[{
+                    'project_id': 42, 'iid': 1, 'title': 'X', 'state': 'opened',
+                    'labels': [], 'assignee': None,
+                    'web_url': 'https://gl/x', 'updated_at': '2026-07-01T00:00:00Z',
+                }], status=200, match_querystring=False,
+            )
+        for _ in range(4):
+            responses.add(
+                responses.GET, f'{API_BASE}/merge_requests',
+                json=[], status=200, match_querystring=False,
+            )
+        # Mock /projects to return name for project_id 42
+        responses.add(
+            responses.GET, f'{API_BASE}/projects',
+            json=[{'id': 42, 'name': 'Cool Project', 'path_with_namespace': 'team/cool'}],
+            status=200, match_querystring=False,
+        )
+        r = client.post('/search', data={'username': 'alice', 'labels': ''})
+        assert r.status_code == 200
+        assert 'team/cool' in r.text
+        assert 'p42' in r.text

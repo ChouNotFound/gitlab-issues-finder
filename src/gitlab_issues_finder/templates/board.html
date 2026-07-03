@@ -231,7 +231,7 @@
                             <tbody>
                                 {% for it in all_items[:10] %}
                                 <tr>
-                                    <td><span class="num">{{ '!' if it.type == 'merge_request' else '#' }}{{ it.iid }}</span><span class="cell-meta">p{{ it.project_id }}</span></td>
+                                    <td><span class="num">{{ '!' if it.type == 'merge_request' else '#' }}{{ it.iid }}</span><span class="cell-meta">p{{ it.project_id }}{% if project_info and project_info.get(it.project_id) %} <span class="project-name">{{ project_info[it.project_id].path_with_namespace }}</span>{% endif %}</span></td>
                                     <td class="cell-title"><a href="{{ it.web_url }}" target="_blank" rel="noopener">{{ it.title }}</a></td>
                                     <td><span class="kanban-card-type is-{{ it.type }}">{{ it.type[:3]|upper }}</span></td>
                                     <td><span class="num">{{ it.updated_at[:10] }}</span></td>
@@ -305,7 +305,7 @@
                                        title="{{ item.title }}">{{ item.title }}</a>
                                 </div>
                                 <div class="kanban-card-meta">
-                                    <span class="cell-meta">p{{ item.project_id }}</span>
+                                    <span class="cell-meta">p{{ item.project_id }}{% if project_info and project_info.get(item.project_id) %} <span class="project-name">{{ project_info[item.project_id].path_with_namespace }}</span>{% endif %}</span>
                                     {% for label in item.labels[:4] %}<span class="tag">{{ label }}</span>{% endfor %}
                                     <span class="updated">{{ item.updated_at[:10] }}</span>
                                 </div>
