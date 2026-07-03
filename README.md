@@ -8,7 +8,10 @@
 
 - 🔍 **多维筛选**：assignee / mention / author 三维度（MR 额外 reviewer） 同时拉取，去重合并
 - 🏷️ **自选标签**：逗号分隔多标签，AND 关系精确过滤
-- 🗂️ **看板视图**：5 列 Kanban + 自定义列、拖拽改分桶、列名可改、列可删可加
+- 🗂️ **看板视图**：5 列 Kanban + 自定义列、拖拽改分桶、列名可改、列可删可加、列可重排
+- 🔍 **看板内搜索**：标题实时搜索 + 5 种排序（更新/IID/标题）
+- 📅 **时间范围**：since/until 按 updated_at 过滤
+- 📤 **数据导出**：CSV / Markdown 表格一键导出（贴周报 / PR）
 - 🎨 **现代 UI**：仿 Linear / GitLab / Trello 设计风格，CSS 变量主题切换 (Light/Dark/Auto)
 - 💾 **本地持久化**：SQLite 存看板状态、用户偏好、最近访问用户
 - 🧪 **完整测试**：88 个单元测试，覆盖配置、查询、客户端、Web 路由、看板 API、存储层
@@ -89,8 +92,8 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 | Method | Path | 说明 |
 |---|---|---|
 | `GET` | `/` | 首页 |
-| `POST` | `/search` | 查询视图 |
-| `GET` | `/board` | 看板视图 |
+| `POST` | `/search` | 查询视图（form: `username`, `labels`, `since`, `until`） |
+| `GET` | `/board` | 看板视图（query: `username`, `view`, `q`, `since`, `until`） |
 | `GET` | `/api/users` | 活跃用户列表（首页自动补全） |
 | `GET` | `/api/recent-users` | 最近访问的用户 |
 | `POST` | `/api/board/move` | 拖拽覆盖 `{username, item_key, column_id}` |
@@ -103,6 +106,9 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 | GET  | /api/health | 健康检查（DB + config） |
 | `GET`  | `/api/export.csv` | 导出 CSV (query: `username`, `labels`) |
 | `GET`  | `/api/export.md` | 导出 Markdown 表格 (query: `username`, `labels`) |
+| `GET`  | `/api/board/columns` | 查询某用户的列定义 |
+| `POST` | `/api/board/columns/reorder` | 重排列 `{username, column_ids: [...]}` |
+| `GET`  | `/api/metrics` | Prometheus 文本格式的进程指标 |
 
 > 拖拽与列管理**仅本地**，不调任何 mutation API；看板始终只需 `read_api` Token。
 
@@ -118,6 +124,10 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 | `WEB_PORT` | | `8000` | Web 端口 |
 | `PAGE_SIZE` | | `100` | GitLab API 每页（1-100） |
 | `DB_PATH` | | `data/app.db` | SQLite 文件位置 |
+| `LOG_LEVEL` | | `INFO` | 日志级别 `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `LOG_JSON` | | `0` | `1` 启用 JSON 格式（便于接入 Loki/ELK） |
+| `RATE_LIMIT_RPM` | | `60` | 每 IP 每分钟请求上限；`0` 关闭限流 |
+| `RATE_LIMIT_BURST` | | `=RATE_LIMIT_RPM` | 令牌桶容量 |
 
 ## 🔐 SSL 自签名证书
 
@@ -141,8 +151,13 @@ gitlab-issues-finder/
 │   ├── config.py        # .env 加载
 │   ├── errors.py        # 异常层级
 │   ├── models.py        # ItemRef (issue + MR 共用)
-│   ├── queries.py       # 多维度查询 (assignee/mention/author/reviewer/labels) + 分页 + 去重
-│   ├── storage.py       # SQLite 持久化层 (看板、列、主题、最近用户)
+│   ├── queries.py       # 多维度查询 + 分页 + 去重（ItemKind/Relation 枚举 + fetch_items 工厂）
+│   ├── storage.py       # SQLite 持久化层 (看板、列、主题、最近用户、项目名缓存)
+│   ├── logging_setup.py # 结构化日志（人/JSON 双格式）
+│   ├── middleware.py    # X-Request-ID 注入 + 请求日志
+│   ├── rate_limit.py    # 内存令牌桶限流
+│   ├── metrics.py       # 进程内指标 + /metrics 渲染
+│   ├── project_resolver.py  # 项目名解析（GitLab /projects + SQLite 缓存）
 │   ├── templates/
 │   │   ├── _nav.html    # 顶部 nav + 主题切换器
 │   │   ├── index.html   # 首页：用户名输入
@@ -161,6 +176,25 @@ gitlab-issues-finder/
     └── fixtures/
 ```
 
+## 📊 Observability
+
+- `GET /api/health`：返回 `{status, checks: {db, config}}`。
+  - `db` 检查能否读 SQLite；`config` 检查 `GITLAB_URL`/`GITLAB_TOKEN` 配齐。
+  - 两者都通过 → `status: ok`；否则 `degraded`。
+- `GET /api/metrics`：Prometheus 文本格式（text/plain; version=0.0.4）。
+  - 始终有 `process_uptime_seconds`。
+  - 中间件自动记录 `http_requests_total{method,path}` 与
+    `http_request_duration_ms`。
+- `X-Request-ID` header：传入时透传 / 校验；缺省时注入 16 字节 URL-safe 随机串。
+  响应也带同名 header。配合 `LOG_JSON=1` 便于 ELK/Loki 关联。
+- `LOG_LEVEL` / `LOG_JSON`：见下方配置表。
+
+## 🛡 Rate limit
+
+- 默认 60 req/min/IP（`RATE_LIMIT_RPM`）。
+- 触发限流返回 `429 Too Many Requests` + `Retry-After` header。
+- 信任反代时建议把 `RATE_LIMIT_RPM` 设为 0（关掉），由反代层做限流。
+
 ## ✅ 运行测试
 
 ```bash
@@ -168,13 +202,17 @@ pip install -r requirements-dev.txt
 pytest -v
 ```
 
-测试覆盖（88 个）：
-- `test_config.py`：配置加载、SSL 解析、缺失必填项、`DB_PATH`
+测试覆盖（172 个单元 + 集成 + e2e）：
+- `test_config.py`：配置加载、SSL 解析、缺失必填项、`DB_PATH`、pydantic-settings 字段约束
 - `test_models.py`：`ItemRef` 数据类、`type` 字段、三元组 key
-- `test_queries.py`：分页、单页/多页、空结果、跨类型不去重、各维度参数路由
+- `test_queries.py`：分页、单页/多页、空结果、跨类型不去重、各维度参数路由、工厂函数
 - `test_client.py`：异常映射（401/403/500/超时）、SSL
-- `test_app.py`：FastAPI 端到端、错误页渲染、看板 5 列分桶、列管理 API、主题切换
-- `test_storage.py`：看板拖拽、列 CRUD、主题、最近用户
+- `test_app.py`：FastAPI 端到端、错误页渲染、看板 5 列分桶、列管理 API、主题切换、列重排、项目名显示、OpenAPI tags
+- `test_storage.py`：看板拖拽、列 CRUD、列重排、主题、最近用户、项目名缓存
+- `test_project_resolver.py`：缓存命中 / 强制刷新 / 静默丢弃找不到的项目
+- `test_logging.py`：JSON 格式 / LOG_LEVEL / 幂等 / get_logger 单例
+- `test_middleware.py`：X-Request-ID 透传 / 注入 / 输入校验
+- `test_rate_limit.py`：令牌桶行为 / 429 + Retry-After / 限流键隔离
 
 ## 🐳 Docker 部署
 
