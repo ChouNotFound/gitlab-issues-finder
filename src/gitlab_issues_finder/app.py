@@ -518,6 +518,19 @@ async def api_board_reset(payload: dict = Body(...)) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@app.get("/api/board/columns", tags=["Board"])
+async def api_board_columns_list(
+    username: str = Query(..., description="GitLab username"),
+) -> JSONResponse:
+    """返回某用户的列定义列表（首次访问会自动初始化内置列）。"""
+    username = _validate_username(username)
+    if not username:
+        raise HTTPException(status_code=400, detail="missing username")
+    dbp = _db_path()
+    columns = storage.list_columns(dbp, username)
+    return JSONResponse({"username": username, "columns": columns})
+
+
 @app.post("/api/board/columns", tags=["Board"])
 async def api_board_columns_add(payload: dict = Body(...)) -> JSONResponse:
     username = _validate_username(payload.get("username", ""))

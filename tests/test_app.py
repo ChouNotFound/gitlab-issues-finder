@@ -778,3 +778,30 @@ class TestOpenAPITags:
         info = spec["info"]
         assert "GitLab Status Board" in info["title"]
         assert info["description"]
+
+
+class TestListColumns:
+    def test_list_columns_initializes_builtin(self, client, tmp_db):
+        r = client.get("/api/board/columns", params={"username": "alice"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["username"] == "alice"
+        ids = [c["id"] for c in data["columns"]]
+        assert ids == ["reviewer", "assignee", "mention", "author", "other"]
+        assert all(c["is_builtin"] for c in data["columns"])
+
+    def test_list_columns_includes_custom(self, client, tmp_db):
+        client.post(
+            "/api/board/columns",
+            json={"username": "alice", "column_id": "reviewing", "title": "Reviewing"},
+        )
+        r = client.get("/api/board/columns", params={"username": "alice"})
+        assert r.status_code == 200
+        ids = [c["id"] for c in r.json()["columns"]]
+        assert "reviewing" in ids
+        custom = [c for c in r.json()["columns"] if c["id"] == "reviewing"][0]
+        assert custom["is_builtin"] is False
+
+    def test_list_columns_missing_username(self, client, tmp_db):
+        r = client.get("/api/board/columns")
+        assert r.status_code == 422  # FastAPI validation error
