@@ -127,3 +127,29 @@ class TestInit:
     def test_init_idempotent(self, tmp_db):
         storage.init_db(tmp_db)
         storage.init_db(tmp_db)  # 不应抛错
+
+
+class TestReorderColumnsStorage:
+    def test_reorder_assigns_zero_based_indices(self, tmp_db):
+        from gitlab_issues_finder import storage
+
+        storage.list_columns(tmp_db, "alice")  # initializes builtins
+        new_order = ["author", "reviewer", "assignee", "mention", "other"]
+        updated = storage.reorder_columns(tmp_db, "alice", new_order)
+        assert updated == 5
+        cols = storage.list_columns(tmp_db, "alice")
+        assert [c["id"] for c in cols] == new_order
+        # sort_index is 0..4
+        assert [c["sort_index"] for c in cols] == [0, 1, 2, 3, 4]
+
+    def test_reorder_partial_only_updates_known(self, tmp_db):
+        from gitlab_issues_finder import storage
+
+        storage.list_columns(tmp_db, "alice")
+        updated = storage.reorder_columns(tmp_db, "alice", ["author", "nope"])
+        # Only 'author' exists in builtins
+        assert updated == 1
+        cols = storage.list_columns(tmp_db, "alice")
+        # 'author' now has sort_index=0; others keep their original higher indices
+        assert cols[0]["id"] == "author"
+        assert cols[0]["sort_index"] == 0

@@ -976,3 +976,46 @@ class TestMetricsUnit:
         b = metrics.get_metrics()
         assert a is b
         metrics.reset_metrics()
+
+
+class TestReorderColumns:
+    def test_reorder_basic(self, client, tmp_db):
+        # Initial: reviewer/assignee/mention/author/other
+        r = client.post(
+            "/api/board/columns/reorder",
+            json={
+                "username": "alice",
+                "column_ids": ["author", "reviewer", "assignee", "mention", "other"],
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert data["updated"] == 5
+        # Verify the new order
+        r2 = client.get("/api/board/columns", params={"username": "alice"})
+        ids = [c["id"] for c in r2.json()["columns"]]
+        assert ids == ["author", "reviewer", "assignee", "mention", "other"]
+
+    def test_reorder_unknown_id_ignored(self, client, tmp_db):
+        r = client.post(
+            "/api/board/columns/reorder",
+            json={
+                "username": "alice",
+                "column_ids": ["nonexistent", "author", "assignee", "mention", "other", "reviewer"],
+            },
+        )
+        assert r.status_code == 200
+        # nonexistent is ignored; the 5 known columns get reordered
+        assert r.json()["updated"] == 5
+
+    def test_reorder_missing_username(self, client, tmp_db):
+        r = client.post("/api/board/columns/reorder", json={"column_ids": ["a", "b"]})
+        assert r.status_code == 400
+
+    def test_reorder_invalid_payload(self, client, tmp_db):
+        r = client.post(
+            "/api/board/columns/reorder",
+            json={"username": "alice", "column_ids": "not-a-list"},
+        )
+        assert r.status_code == 400

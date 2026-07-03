@@ -649,6 +649,20 @@ async def api_board_columns_rename(
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/board/columns/reorder", tags=["Board"])
+async def api_board_columns_reorder(payload: dict = Body(...)) -> JSONResponse:
+    """按传入顺序重排列。payload: ``{username, column_ids: [...]}``。"""
+    username = _validate_username(payload.get("username", ""))
+    if not username:
+        raise HTTPException(status_code=400, detail="missing username")
+    column_ids = payload.get("column_ids")
+    if not isinstance(column_ids, list) or not all(isinstance(c, str) for c in column_ids):
+        raise HTTPException(status_code=400, detail="column_ids must be a list of strings")
+    dbp = _db_path()
+    updated = storage.reorder_columns(dbp, username, column_ids)
+    return JSONResponse({"ok": True, "updated": updated})
+
+
 @app.delete("/api/board/columns/{column_id}", tags=["Board"])
 async def api_board_columns_delete(
     column_id: str,

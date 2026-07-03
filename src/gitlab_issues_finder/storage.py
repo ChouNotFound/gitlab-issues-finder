@@ -281,3 +281,33 @@ def stale_projects(db_path: str | Path, max_age_seconds: int = 86400 * 7) -> lis
             (max_age_seconds,),
         ).fetchall()
     return [r["project_id"] for r in rows]
+
+
+# ----- Column reorder -----
+def reorder_columns(db_path: str | Path, username: str, column_ids: list[str]) -> int:
+    """按 ``column_ids`` 顺序重排该用户的列。
+
+    返回成功更新的行数。首次访问某用户时会自动初始化内置列（与
+    ``list_columns`` 行为一致）。
+
+    要求：
+      - 传入未知的 column_id 会被忽略。
+    """
+    _ensure_builtin_columns(db_path, username)
+    with get_conn(db_path) as conn:
+        existing = {
+            r["column_id"]: r["sort_index"]
+            for r in conn.execute(
+                "SELECT column_id, sort_index FROM board_columns WHERE username = ?",
+                (username,),
+            ).fetchall()
+        }
+        updated = 0
+        for idx, cid in enumerate(column_ids):
+            if cid in existing:
+                conn.execute(
+                    "UPDATE board_columns SET sort_index = ? WHERE username = ? AND column_id = ?",
+                    (idx, username, cid),
+                )
+                updated += 1
+    return updated
