@@ -175,63 +175,18 @@ def dedupe(*lists: Iterable[IssueRef]) -> list[IssueRef]:
     return out
 
 
-# ----------------------------------------------------------------------------
-# Backward-compat thin wrappers.
-# New code should call `fetch_items(gl, username, relation, kind, page_size)`
-# directly. These wrappers remain so existing tests / external imports do
-# not break, and will be removed in a future iteration once all call sites
-# migrate.
-# ----------------------------------------------------------------------------
-
-
-def fetch_issues_by_assignee(gl, username, page_size=100):
-    return fetch_items(gl, username, Relation.ASSIGNEE, ItemKind.ISSUE, page_size)
-
-
-def fetch_issues_by_mention(gl, username, page_size=100):
-    return fetch_items(gl, username, Relation.MENTION, ItemKind.ISSUE, page_size)
-
-
-def fetch_issues_by_author(gl, username, page_size=100):
-    return fetch_items(gl, username, Relation.AUTHOR, ItemKind.ISSUE, page_size)
-
-
-def fetch_merge_requests_by_assignee(gl, username, page_size=100):
-    return fetch_items(gl, username, Relation.ASSIGNEE, ItemKind.MERGE_REQUEST, page_size)
-
-
-def fetch_merge_requests_by_mention(gl, username, page_size=100):
-    return fetch_items(gl, username, Relation.MENTION, ItemKind.MERGE_REQUEST, page_size)
-
-
-def fetch_merge_requests_by_author(gl, username, page_size=100):
-    return fetch_items(gl, username, Relation.AUTHOR, ItemKind.MERGE_REQUEST, page_size)
-
-
-def fetch_merge_requests_by_reviewer(gl, username, page_size=100):
-    return fetch_items(gl, username, Relation.REVIEWER, ItemKind.MERGE_REQUEST, page_size)
-
-
-def fetch_merge_requests_by_labels(
-    gl,
-    labels,
-    page_size=100,
-):
-    return fetch_labeled(gl, labels, kind=ItemKind.MERGE_REQUEST, page_size=page_size)
-
-
 def resolve_projects(
     gl: gitlab.Gitlab,
-    project_ids: Iterable[int],
+    project_ids,
     page_size: int = 100,
-) -> dict[int, dict]:
+) -> dict:
     """按 project_id 批量拉取 {name, path_with_namespace}。
 
     GitLab /projects/:id 单点拉取太慢，所以走 /projects?membership=false
     + 客户端过滤。返回 {project_id: {name, path_with_namespace}}。
     """
     wanted = set(project_ids)
-    out: dict[int, dict] = {}
+    out: dict = {}
     if not wanted:
         return out
     page = 1

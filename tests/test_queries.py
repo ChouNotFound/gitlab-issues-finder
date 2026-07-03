@@ -15,16 +15,8 @@ from gitlab_issues_finder.queries import (
     ItemKind,
     Relation,
     dedupe,
-    fetch_issues_by_assignee,
-    fetch_issues_by_author,
-    fetch_issues_by_mention,
     fetch_items,
     fetch_labeled,
-    fetch_merge_requests_by_assignee,
-    fetch_merge_requests_by_author,
-    fetch_merge_requests_by_labels,
-    fetch_merge_requests_by_mention,
-    fetch_merge_requests_by_reviewer,
     fetch_users,
 )
 from tests.conftest import load_fixture
@@ -79,7 +71,7 @@ class TestIssueDimensionQueries:
     def test_fetch_issues_by_assignee(self, gl):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_assigned.json")])
-        result = fetch_issues_by_assignee(gl, "alice")
+        result = fetch_items(gl, "alice", Relation.ASSIGNEE, ItemKind.ISSUE)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "assignee_username", "alice")
 
@@ -87,7 +79,7 @@ class TestIssueDimensionQueries:
     def test_fetch_issues_by_mention(self, gl):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_assigned.json")])
-        result = fetch_issues_by_mention(gl, "alice")
+        result = fetch_items(gl, "alice", Relation.MENTION, ItemKind.ISSUE)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "mention_username", "alice")
 
@@ -95,31 +87,28 @@ class TestIssueDimensionQueries:
     def test_fetch_issues_by_author(self, gl):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_assigned.json")])
-        result = fetch_issues_by_author(gl, "alice")
+        result = fetch_items(gl, "alice", Relation.AUTHOR, ItemKind.ISSUE)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "author_username", "alice")
 
     @pytest.mark.parametrize(
-        "func_name,param",
+        "relation,param",
         [
-            ("fetch_issues_by_assignee", "assignee_username"),
-            ("fetch_issues_by_mention", "mention_username"),
-            ("fetch_issues_by_author", "author_username"),
+            (Relation.ASSIGNEE, "assignee_username"),
+            (Relation.MENTION, "mention_username"),
+            (Relation.AUTHOR, "author_username"),
         ],
     )
     @responses.activate
-    def test_issue_endpoint_passes_with_membership_false(self, gl, func_name, param):
+    def test_issue_endpoint_passes_with_membership_false(self, gl, relation, param):
         """关键回归：所有 issue 维度查询都必须传 with_membership=false。
 
         否则用户被指派但不是项目成员时，GitLab 会按 membership 限定范围，
         导致"项目里明明给我派了活但查不到"的 bug。
         """
-        from gitlab_issues_finder import queries as q
-
-        func = getattr(q, func_name)
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/issues", [[]])
-        func(gl, "alice")
+        fetch_items(gl, "alice", relation, ItemKind.ISSUE)
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs.get("with_membership") == ["false"]
         assert last_qs.get(param) == ["alice"]
@@ -132,7 +121,7 @@ class TestMergeRequestDimensionQueries:
     def test_fetch_merge_requests_by_assignee(self, gl):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/merge_requests", [load_fixture("mr_mentioned.json")])
-        result = fetch_merge_requests_by_assignee(gl, "alice")
+        result = fetch_items(gl, "alice", Relation.ASSIGNEE, ItemKind.MERGE_REQUEST)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "assignee_username", "alice")
 
@@ -140,7 +129,7 @@ class TestMergeRequestDimensionQueries:
     def test_fetch_merge_requests_by_mention(self, gl):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/merge_requests", [load_fixture("mr_mentioned.json")])
-        result = fetch_merge_requests_by_mention(gl, "alice")
+        result = fetch_items(gl, "alice", Relation.MENTION, ItemKind.MERGE_REQUEST)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "mention_username", "alice")
 
@@ -148,7 +137,7 @@ class TestMergeRequestDimensionQueries:
     def test_fetch_merge_requests_by_author(self, gl):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/merge_requests", [load_fixture("mr_mentioned.json")])
-        result = fetch_merge_requests_by_author(gl, "alice")
+        result = fetch_items(gl, "alice", Relation.AUTHOR, ItemKind.MERGE_REQUEST)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "author_username", "alice")
 
@@ -156,7 +145,7 @@ class TestMergeRequestDimensionQueries:
     def test_fetch_merge_requests_by_reviewer(self, gl):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/merge_requests", [load_fixture("mr_mentioned.json")])
-        result = fetch_merge_requests_by_reviewer(gl, "alice")
+        result = fetch_items(gl, "alice", Relation.REVIEWER, ItemKind.MERGE_REQUEST)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "reviewer_username", "alice")
 
@@ -183,7 +172,7 @@ class TestFetchMergeRequestsByLabels:
     def test_labels_passed_as_csv(self, gl):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/merge_requests", [load_fixture("mr_labeled.json")])
-        result = fetch_merge_requests_by_labels(gl, ["bug", "priority::high"])
+        result = fetch_labeled(gl, ["bug", "priority::high"], kind=ItemKind.MERGE_REQUEST)
         assert all(it.type == "merge_request" for it in result)
         _assert_query_param(responses.calls[-1].request.url, "labels", "bug,priority::high")
 
