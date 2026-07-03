@@ -1367,3 +1367,23 @@ class TestItemsPageSizeOverride:
         """>100 应该被 FastAPI 验证拒绝（422）。"""
         r = client.get("/api/items", params={"username": "alice", "page_size": 200})
         assert r.status_code == 422
+
+
+class TestHealthExtraFields:
+    def test_health_includes_timestamp_and_uptime(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        r = client.get("/api/health")
+        assert r.status_code == 200
+        data = r.json()
+        # 新增的 timestamp + uptime 字段
+        assert "timestamp" in data
+        assert "uptime_seconds" in data
+        # timestamp 是 ISO 8601 格式（含 T 和 Z 或 +00:00）
+        assert "T" in data["timestamp"]
+        # uptime >= 0 且是数字
+        assert isinstance(data["uptime_seconds"], (int, float))
+        assert data["uptime_seconds"] >= 0
+        # 原有字段保留
+        assert "status" in data
+        assert "checks" in data

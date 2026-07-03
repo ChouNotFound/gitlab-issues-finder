@@ -23,7 +23,9 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import gitlab
@@ -53,6 +55,8 @@ from gitlab_issues_finder.queries import (
 from gitlab_issues_finder.rate_limit import get_default_limiter
 
 logger = get_logger(__name__)
+
+_START_TIME = time.time()
 
 # ----- 路径解析 -----
 _PACKAGE_DIR = Path(__file__).resolve().parent
@@ -844,7 +848,14 @@ async def api_health() -> JSONResponse:
         checks["config"] = {"ok": False, "detail": str(e)}
 
     overall = "ok" if all(c["ok"] for c in checks.values()) else "degraded"
-    return JSONResponse({"status": overall, "checks": checks})
+    return JSONResponse(
+        {
+            "status": overall,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "uptime_seconds": round(time.time() - _START_TIME, 2),
+            "checks": checks,
+        }
+    )
 
 
 @app.get("/metrics", tags=["System"])
