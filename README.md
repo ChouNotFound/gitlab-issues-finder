@@ -101,6 +101,8 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 | `POST` | `/api/preferences` | 主题 `{username, theme}` |
 | GET  | /api/version | 应用 + Python + FastAPI 版本 |
 | GET  | /api/health | 健康检查（DB + config） |
+| `GET`  | `/api/export.csv` | 导出 CSV (query: `username`, `labels`) |
+| `GET`  | `/api/export.md` | 导出 Markdown 表格 (query: `username`, `labels`) |
 
 > 拖拽与列管理**仅本地**，不调任何 mutation API；看板始终只需 `read_api` Token。
 
