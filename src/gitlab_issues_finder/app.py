@@ -38,7 +38,7 @@ from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.logging_setup import get_logger
 from gitlab_issues_finder.metrics import get_metrics
-from gitlab_issues_finder.middleware import RequestIDMiddleware
+from gitlab_issues_finder.middleware import RequestIDMiddleware, SecurityHeadersMiddleware
 from gitlab_issues_finder.models import IssueRef
 from gitlab_issues_finder.project_resolver import resolve as resolve_projects
 from gitlab_issues_finder.queries import (
@@ -118,6 +118,7 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(_RateLimitMiddleware)
 app.add_middleware(RequestIDMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))

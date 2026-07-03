@@ -120,3 +120,30 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
                 },
             )
         return response
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """为所有响应附加常见的安全头。
+
+    - X-Content-Type-Options: nosniff
+        阻止浏览器做 MIME 嗅探，避免 text/plain 被当 HTML 执行。
+    - X-Frame-Options: DENY
+        禁止 iframe 嵌入（防御 clickjacking）。
+    - Referrer-Policy: no-referrer
+        防止 URL（含 token / 用户名）通过 Referer 泄漏给第三方。
+    - Permissions-Policy: 关闭不用的浏览器能力（camera/mic/geolocation）。
+
+    注意：这些头对纯 API 调用没有视觉影响，但对 Web 浏览器渲染
+    /board /search 等 HTML 页面时有意义。
+    """
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=()",
+        )
+        return response

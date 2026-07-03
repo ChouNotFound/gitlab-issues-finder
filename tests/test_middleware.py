@@ -55,3 +55,22 @@ class TestRequestIDMiddleware:
         r = client.get("/echo", headers={"X-Request-ID": "evil\nlog"})
         # invalid incoming id is replaced with a generated one
         assert "\n" not in r.headers["x-request-id"]
+
+
+class TestSecurityHeadersMiddleware:
+    def test_security_headers_present(self):
+        from gitlab_issues_finder.middleware import SecurityHeadersMiddleware
+
+        app = FastAPI()
+        app.add_middleware(SecurityHeadersMiddleware)
+
+        @app.get("/ping")
+        def ping():
+            return {"ok": True}
+
+        c = TestClient(app)
+        r = c.get("/ping")
+        assert r.headers["X-Content-Type-Options"] == "nosniff"
+        assert r.headers["X-Frame-Options"] == "DENY"
+        assert r.headers["Referrer-Policy"] == "no-referrer"
+        assert "camera=()" in r.headers["Permissions-Policy"]
