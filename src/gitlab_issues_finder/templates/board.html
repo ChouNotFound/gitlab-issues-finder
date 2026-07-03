@@ -128,6 +128,19 @@
                             {% if filter_q %}· 标签 {{ filter_q }}{% endif %}
                         </span>
                     </h1>
+                    {% if view != 'summary' %}
+                    <div class="console-tools">
+                        <input type="search" id="card-filter" placeholder="按标题搜索 (实时)..."
+                               autocomplete="off" spellcheck="false" class="tool-input">
+                        <select id="card-sort" class="tool-input">
+                            <option value="updated_desc">最近更新</option>
+                            <option value="updated_asc">最久更新</option>
+                            <option value="iid_asc">IID 升序</option>
+                            <option value="iid_desc">IID 降序</option>
+                            <option value="title_asc">标题 A→Z</option>
+                        </select>
+                    </div>
+                    {% endif %}
                 </header>
 
                 {# ====== Summary 视图 ====== #}
@@ -351,6 +364,66 @@
 </div>
 
 <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+{% if username and view != 'summary' %}
+<script>
+(function () {
+    const filterEl = document.getElementById('card-filter');
+    const sortEl = document.getElementById('card-sort');
+    if (!filterEl || !sortEl) return;
+
+    const norm = (s) => (s || '').toString().toLowerCase();
+
+    function applyFilter() {
+        const q = norm(filterEl.value.trim());
+        const targets = document.querySelectorAll(
+            '.kanban-card, .data-table tbody tr, .proj-list-row'
+        );
+        targets.forEach((el) => {
+            const txt = norm(el.dataset.searchText || el.textContent);
+            el.style.display = !q || txt.indexOf(q) !== -1 ? '' : 'none';
+        });
+    }
+
+    function compareCards(a, b, mode) {
+        const da = a.dataset, db = b.dataset;
+        switch (mode) {
+            case 'updated_desc': return (db.updated || '').localeCompare(da.updated || '');
+            case 'updated_asc':  return (da.updated || '').localeCompare(db.updated || '');
+            case 'iid_asc':      return Number(da.iid || 0) - Number(db.iid || 0);
+            case 'iid_desc':     return Number(db.iid || 0) - Number(da.iid || 0);
+            case 'title_asc':    return norm(da.title || a.textContent).localeCompare(norm(db.title || b.textContent));
+            default: return 0;
+        }
+    }
+
+    function applySort() {
+        const mode = sortEl.value;
+        document.querySelectorAll('.kanban-col-body').forEach((body) => {
+            const cards = Array.from(body.querySelectorAll('.kanban-card'));
+            cards.sort((a, b) => compareCards(a, b, mode));
+            cards.forEach((c) => body.appendChild(c));
+        });
+        document.querySelectorAll('.data-table').forEach((tbl) => {
+            const tbody = tbl.tBodies[0];
+            if (!tbody) return;
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            rows.sort((a, b) => compareCards(a, b, mode));
+            rows.forEach((r) => tbody.appendChild(r));
+        });
+        document.querySelectorAll('.proj-list').forEach((list) => {
+            const items = Array.from(list.querySelectorAll('.proj-list-row, .proj-list-item'));
+            items.sort((a, b) => compareCards(a, b, mode));
+            items.forEach((i) => list.appendChild(i));
+        });
+    }
+
+    let ft;
+    filterEl.addEventListener('input', () => { clearTimeout(ft); ft = setTimeout(applyFilter, 80); });
+    sortEl.addEventListener('change', applySort);
+})();
+</script>
+{% endif %}
 
 {% if username and view == 'relation' %}
 <script>

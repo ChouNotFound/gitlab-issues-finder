@@ -618,3 +618,35 @@ class TestExportEndpoints:
         assert r.status_code in (200, 422)
         if r.status_code == 200:
             assert "GITLAB_" in r.text or "配置" in r.text
+
+
+class TestBoardFilterAndSort:
+    """新工具栏：标题实时搜索 + 排序下拉。"""
+
+    @responses.activate
+    def test_filter_and_sort_rendered_for_non_summary(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        for _ in range(3):
+            responses.add(responses.GET, f"{API_BASE}/issues", json=[], status=200, match_querystring=False)
+        for _ in range(4):
+            responses.add(responses.GET, f"{API_BASE}/merge_requests", json=[], status=200, match_querystring=False)
+        for view in ("all", "issues", "mrs", "relation", "project"):
+            r = client.get(f"/board?username=alice&view={view}")
+            assert r.status_code == 200
+            assert 'id="card-filter"' in r.text, f"missing filter input on view={view}"
+            assert 'id="card-sort"' in r.text, f"missing sort select on view={view}"
+            assert "按标题搜索" in r.text
+
+    @responses.activate
+    def test_filter_and_sort_NOT_rendered_for_summary(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        for _ in range(3):
+            responses.add(responses.GET, f"{API_BASE}/issues", json=[], status=200, match_querystring=False)
+        for _ in range(4):
+            responses.add(responses.GET, f"{API_BASE}/merge_requests", json=[], status=200, match_querystring=False)
+        r = client.get("/board?username=alice&view=summary")
+        assert r.status_code == 200
+        assert 'id="card-filter"' not in r.text
+        assert 'id="card-sort"' not in r.text
