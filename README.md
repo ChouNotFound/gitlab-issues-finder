@@ -199,6 +199,21 @@ gitlab-issues-finder/
 - 触发限流返回 `429 Too Many Requests` + `Retry-After` header。
 - 信任反代时建议把 `RATE_LIMIT_RPM` 设为 0（关掉），由反代层做限流。
 
+## 🛠 本地命令
+
+| 任务 | Windows | POSIX |
+|---|---|---|
+| 安装 | `pip install -r requirements-dev.txt && pip install -e .` | 同左 |
+| 跑测试 | `pytest -v` 或 `make test` | `make test` |
+| Lint | `ruff check src tests` 或 `make lint` | `make lint` |
+| Format | `ruff format src tests` 或 `make format` | `make format` |
+| 类型检查 | `mypy src/gitlab_issues_finder` 或 `make typecheck` | `make typecheck` |
+| 跑服务 | `.\run.ps1` | `python -m gitlab_issues_finder` 或 `make run` |
+| Pre-commit | `pre-commit run --all-files` 或 `make precommit` | `make precommit` |
+| 清理 | `make clean` | `make clean` |
+
+`make help` 列出所有目标。
+
 ## 🧪 本地开发
 
 ```bash
