@@ -1115,3 +1115,46 @@ class TestPreviewEndpoint:
             },
         )
         assert r.status_code == 400
+
+
+class TestMeEndpoint:
+    @responses.activate
+    def test_me_returns_user_info(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/user",
+            json={
+                "id": 42,
+                "username": "alice",
+                "name": "Alice Wonderland",
+                "email": "alice@example.com",
+                "state": "active",
+                "avatar_url": "https://gl/a.png",
+                "web_url": "https://gl/alice",
+            },
+            status=200,
+        )
+        r = client.get("/api/me")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["username"] == "alice"
+        assert data["id"] == 42
+        assert data["name"] == "Alice Wonderland"
+        assert data["web_url"] == "https://gl/alice"
+
+    @responses.activate
+    def test_me_401_raises_auth_error(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/user",
+            json={"message": "401 Unauthorized"},
+            status=401,
+        )
+        r = client.get("/api/me")
+        # The AppError handler renders the error page
+        assert r.status_code == 200
+        assert "认证失败" in r.text

@@ -34,6 +34,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from gitlab_issues_finder import storage
 from gitlab_issues_finder.client import build_client
+import gitlab
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.logging_setup import get_logger
@@ -550,6 +551,33 @@ def _compute_summary(
 
 
 # ----- JSON API -----
+@app.get("/api/me", tags=["Users"])
+async def api_me() -> JSONResponse:
+    """返回当前配置的 GitLab Token 所对应的用户信息。
+
+    用法：部署完成后调用一次，确认 .env 里的 token 是哪个账号。
+    也能用来核对 token 是否有 read_api scope。
+    """
+    cfg = AppConfig.from_env()
+    gl = build_client(cfg)
+    try:
+        me: dict = gl.http_get("/user")  # type: ignore[assignment]
+    except gitlab.exceptions.GitlabError as e:
+        code = getattr(e, "response_code", None)
+        raise AuthError(f"无法获取当前用户：{e} (HTTP {code or '?'})") from e
+    return JSONResponse(
+        {
+            "id": me.get("id"),
+            "username": me.get("username"),
+            "name": me.get("name"),
+            "email": me.get("email"),
+            "state": me.get("state"),
+            "avatar_url": me.get("avatar_url"),
+            "web_url": me.get("web_url"),
+        }
+    )
+
+
 @app.get("/api/users", tags=["Users"])
 async def api_users() -> JSONResponse:
     """返回活跃用户列表（精简字段），供首页 datalist 自动补全使用。失败时静默返回空。"""
