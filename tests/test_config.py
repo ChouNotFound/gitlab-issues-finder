@@ -82,5 +82,81 @@ class TestAppConfigFromEnv:
         monkeypatch.setenv("GITLAB_URL", "https://gl")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         monkeypatch.setenv("GITLAB_TIMEOUT", "not-a-number")
-        with pytest.raises(ConfigError, match="数值型配置"):
+        # 错误消息：pydantic 的格式以 "1 validation error" 开头
+        with pytest.raises(ConfigError, match="validation error|GITLAB_TIMEOUT|配置"):
             AppConfig.from_env()
+
+
+class TestAppSettingsDirect:
+    """直接对 AppSettings（pydantic）做断言：验证类型 + 字段约束。"""
+
+    def test_required_field_raises_on_empty(self, clean_env):
+        # 没有环境变量时，AppSettings 应该报 ConfigError（GITLAB_URL 是必填）
+        from gitlab_issues_finder.config import AppSettings
+
+        with pytest.raises(ConfigError, match="GITLAB_URL"):
+            AppSettings(_env_file=None)
+
+    def test_defaults_with_required_set(self, monkeypatch):
+        # 设置了必填项后，其余字段应该是合理的默认值
+        from gitlab_issues_finder.config import AppSettings
+
+        monkeypatch.setenv("GITLAB_URL", "https://gl")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        s = AppSettings(_env_file=None)
+        assert s.gitlab_ssl_verify == "true"
+        assert s.gitlab_timeout == 30
+        assert s.web_host == "127.0.0.1"
+        assert s.web_port == 8000
+        assert s.page_size == 100
+        assert s.db_path == "data/app.db"
+
+    def test_url_trailing_slash_stripped(self, monkeypatch):
+        from gitlab_issues_finder.config import AppSettings
+
+        monkeypatch.setenv("GITLAB_URL", "https://gl.example.com/")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        s = AppSettings(_env_file=None)
+        assert s.gitlab_url == "https://gl.example.com"
+
+    def test_page_size_out_of_range_rejected(self, monkeypatch):
+        from gitlab_issues_finder.config import AppSettings
+
+        monkeypatch.setenv("GITLAB_URL", "https://gl")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        monkeypatch.setenv("PAGE_SIZE", "999")
+        with pytest.raises(ConfigError, match="validation error|PAGE_SIZE"):
+            AppSettings(_env_file=None)
+
+    def test_negative_timeout_rejected(self, monkeypatch):
+        from gitlab_issues_finder.config import AppSettings
+
+        monkeypatch.setenv("GITLAB_URL", "https://gl")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        monkeypatch.setenv("GITLAB_TIMEOUT", "-1")
+        with pytest.raises(ConfigError, match="validation error|GITLAB_TIMEOUT"):
+            AppSettings(_env_file=None)
+
+    def test_missing_required_raises_friendly(self, monkeypatch):
+        from gitlab_issues_finder.config import AppSettings
+
+        monkeypatch.delenv("GITLAB_URL", raising=False)
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        with pytest.raises(ConfigError, match="GITLAB_URL"):
+            AppSettings(_env_file=None)
+
+    def test_appconfig_from_env_uses_settings(self, monkeypatch):
+        """AppConfig.from_env 走 AppSettings 路径，结果一致。"""
+        from gitlab_issues_finder.config import AppConfig
+
+        monkeypatch.setenv("GITLAB_URL", "https://gl/")
+        monkeypatch.setenv("GITLAB_TOKEN", "tok")
+        monkeypatch.setenv("GITLAB_SSL_VERIFY", "false")
+        monkeypatch.setenv("WEB_PORT", "9999")
+        monkeypatch.setenv("PAGE_SIZE", "50")
+        cfg = AppConfig.from_env()
+        assert cfg.url == "https://gl"
+        assert cfg.token == "tok"
+        assert cfg.ssl_verify is False
+        assert cfg.web_port == 9999
+        assert cfg.page_size == 50
