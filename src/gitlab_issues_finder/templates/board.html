@@ -173,6 +173,32 @@
                     </div>
                 </div>
 
+                <div class="stat-row" aria-label="按维度命中数">
+                    <div class="stat-group">
+                        <span class="stat-group-label">Issues</span>
+                        {% for key, label, icon in ISSUE_STAT_KEYS %}
+                        <a class="stat-pill stat-pill-{{ key }}"
+                           href="/board?username={{ username }}&view=issues&dim={{ key }}">
+                            <span class="stat-pill-icon" aria-hidden="true">{{ icon }}</span>
+                            <span class="stat-pill-label">{{ label }}</span>
+                            <span class="stat-pill-count">{{ summary.by_relation_counts.issues[key] }}</span>
+                        </a>
+                        {% endfor %}
+                    </div>
+                    <span class="stat-group-divider" aria-hidden="true"></span>
+                    <div class="stat-group">
+                        <span class="stat-group-label">Merge Requests</span>
+                        {% for key, label, icon in MR_STAT_KEYS %}
+                        <a class="stat-pill stat-pill-{{ key }}"
+                           href="/board?username={{ username }}&view=mrs&dim={{ key }}">
+                            <span class="stat-pill-icon" aria-hidden="true">{{ icon }}</span>
+                            <span class="stat-pill-label">{{ label }}</span>
+                            <span class="stat-pill-count">{{ summary.by_relation_counts.mrs[key] }}</span>
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+
                 <div class="console-panels">
                     <section class="console-panel">
                         <h3 class="panel-title">按"与我关系"分布</h3>

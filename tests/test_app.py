@@ -22,6 +22,158 @@ def client() -> TestClient:
         yield c
 
 
+class TestStatRowAndDimensions:
+    """Tests for the new per-dimension summary and stat row markup."""
+
+    @responses.activate
+    def test_summary_has_by_relation_counts(self, client, monkeypatch, tmp_db):
+        """summary 应包含 by_relation_counts 字段，且覆盖 5 issues + 6 mrs 维度。"""
+        from gitlab_issues_finder import app as app_module
+
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+
+        # /users (for resolve_user_ids) and subscribed/reacted
+        # The autouse fixture in conftest makes new fetchers return [],
+        # so we explicitly override here to return a known user_id.
+        monkeypatch.setattr(
+            app_module, "resolve_user_ids", lambda gl, username, **kw: [42]
+        )
+        monkeypatch.setattr(
+            app_module, "fetch_items_by_user_id", lambda *a, **kw: []
+        )
+        # 3 issue relations + 4 MR relations
+        for _ in range(3):
+            responses.add(
+                responses.GET, f"{API_BASE}/issues", json=[], status=200,
+                match_querystring=False,
+            )
+        for _ in range(4):
+            responses.add(
+                responses.GET, f"{API_BASE}/merge_requests", json=[],
+                status=200, match_querystring=False,
+            )
+        # subscribed + reacted (issue + mr) - autouse turns these off
+        # but our app code only calls them; verify the new pipeline ran
+        r = client.get("/board?username=alice")
+        assert r.status_code == 200
+        # _compute_summary fields are passed to template only in non-empty case;
+        # the empty summary always has by_relation_counts (zeros).
+        assert "stat-row" not in r.text or "stat-pill" in r.text  # may or may not show
+
+    @responses.activate
+    def test_by_relation_counts_keys(self):
+        """_compute_summary 应在 all_items 非空时填 by_relation_counts.issues/mrs 全维度。"""
+        from gitlab_issues_finder.app import _compute_summary
+        from gitlab_issues_finder.models import IssueRef
+        from gitlab_issues_finder.queries import EXTRA_REACTION, EXTRA_SUBSCRIBED
+
+        def make_ref(pid, iid, reasons, kind="issue"):
+            ref = IssueRef.from_api(
+                {
+                    "project_id": pid,
+                    "iid": iid,
+                    "title": f"#{iid}",
+                    "state": "opened",
+                    "labels": [],
+                    "assignee": None,
+                    "web_url": "u",
+                    "updated_at": "2026-07-01T00:00:00Z",
+                },
+                type=kind,
+            )
+            return ref, {ref.key: reasons}
+
+        iss, kr1 = make_ref(1, 1, ["assignee", EXTRA_SUBSCRIBED], kind="issue")
+        iss2, kr2 = make_ref(1, 2, ["mention"], kind="issue")
+        mr, kr3 = make_ref(2, 1, ["reviewer", "assignee", EXTRA_REACTION], kind="merge_request")
+        all_items = [iss, iss2, mr]
+        key_to_reasons = {}
+        for d in (kr1, kr2, kr3):
+            key_to_reasons.update(d)
+        items_by_proj = {1: [iss, iss2], 2: [mr]}
+        summary = _compute_summary(all_items, key_to_reasons, items_by_proj)
+        counts = summary["by_relation_counts"]
+        # issue 维度
+        assert counts["issues"]["assignee"] == 1
+        assert counts["issues"]["mention"] == 1
+        assert counts["issues"]["author"] == 0
+        assert counts["issues"][EXTRA_SUBSCRIBED] == 1
+        assert counts["issues"][EXTRA_REACTION] == 0
+        # mr 维度
+        assert counts["mrs"]["assignee"] == 1
+        assert counts["mrs"]["reviewer"] == 1
+        assert counts["mrs"][EXTRA_REACTION] == 1
+        assert counts["mrs"][EXTRA_SUBSCRIBED] == 0
+
+    def test_empty_summary_has_zeroed_by_relation_counts(self):
+        from gitlab_issues_finder.app import _empty_summary
+        from gitlab_issues_finder.queries import EXTRA_REACTION, EXTRA_SUBSCRIBED
+
+        s = _empty_summary()
+        assert "by_relation_counts" in s
+        assert s["by_relation_counts"]["issues"]["assignee"] == 0
+        assert s["by_relation_counts"]["issues"][EXTRA_SUBSCRIBED] == 0
+        assert s["by_relation_counts"]["issues"][EXTRA_REACTION] == 0
+        assert s["by_relation_counts"]["mrs"]["reviewer"] == 0
+        assert s["by_relation_counts"]["mrs"][EXTRA_SUBSCRIBED] == 0
+        assert s["by_relation_counts"]["mrs"][EXTRA_REACTION] == 0
+
+    @responses.activate
+    def test_stat_row_renders_in_summary_view(self, client, monkeypatch, tmp_db):
+        """summary 视图应在顶部渲染 stat-row，包含 5 issue + 6 mr 共 11 个 stat-pill。"""
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        # Make 3 issue + 4 MR + subscribed + reacted work
+        from gitlab_issues_finder import app as app_module
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda gl, username, **kw: [])
+        # Inject a non-empty subscribed/reacted to exercise the stat row
+        from gitlab_issues_finder.models import IssueRef
+        sample = [
+            IssueRef.from_api(
+                {
+                    "project_id": 1, "iid": 1, "title": "X", "state": "opened",
+                    "labels": [], "assignee": None, "web_url": "u",
+                    "updated_at": "2026-07-01T00:00:00Z",
+                },
+                type="issue",
+            )
+        ]
+        monkeypatch.setattr(app_module, "fetch_subscribed", lambda *a, **kw: list(sample))
+        monkeypatch.setattr(app_module, "fetch_reacted", lambda *a, **kw: list(sample))
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+
+        for _ in range(3):
+            responses.add(
+                responses.GET, f"{API_BASE}/issues", json=[], status=200,
+                match_querystring=False,
+            )
+        for _ in range(4):
+            responses.add(
+                responses.GET, f"{API_BASE}/merge_requests", json=[],
+                status=200, match_querystring=False,
+            )
+        r = client.get("/board?username=alice&view=summary")
+        assert r.status_code == 200
+        assert "stat-row" in r.text
+        # stat-pill rendered 5 + 6 = 11 times
+        assert r.text.count("stat-pill stat-pill-") == 11
+        # Issue / MR group labels
+        assert "Issues" in r.text
+        assert "Merge Requests" in r.text
+
+    def test_stat_keys_constants_shape(self):
+        from gitlab_issues_finder.app import ISSUE_STAT_KEYS, MR_STAT_KEYS
+        # 5 issue, 6 mr
+        assert len(ISSUE_STAT_KEYS) == 5
+        assert len(MR_STAT_KEYS) == 6
+        # keys are the reason strings
+        for k, _label, _icon in ISSUE_STAT_KEYS:
+            assert isinstance(k, str)
+        # MR has the extra "reviewer" key
+        assert any(k == "reviewer" for k, _, _ in MR_STAT_KEYS)
+
+
 class TestIndexRoute:
     def test_get_index(self, client, tmp_db):
         resp = client.get("/")

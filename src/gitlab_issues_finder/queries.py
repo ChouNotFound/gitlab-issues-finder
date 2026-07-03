@@ -58,6 +58,25 @@ _RELATION_ITEM_KIND_COMPAT: dict[Relation, frozenset[ItemKind]] = {
     Relation.REVIEWER: frozenset({ItemKind.MERGE_REQUEST}),
 }
 
+# 新增的两个「类关系」常量。
+# 注意：与 Relation 不同，它们不以 username 为查询参数：
+#   - subscribed：取当前 Token 持有者订阅的 items
+#   - reaction：取当前 Token 持有者用某 emoji 反应过的 items
+# 不进 Relation 枚举是为了保持 Relation ↔ username query param 的对应不变量。
+EXTRA_SUBSCRIBED = "subscribed"
+EXTRA_REACTION = "reaction"
+
+# reaction 维度默认 emoji；调用方可在 fetch_reacted 里覆盖。
+REACTION_EMOJI_DEFAULT = "thumbsup"
+
+# Relation → {assignee_id|reviewer_id} 的对应关系（用于多 assignee/reviewer 拉取）。
+# 注意：mention/author 的「多用户」语义 GitLab API 不直接支持（按单一值索引），
+# 因此这两类关系不进入 _ID_RELATION_MAP。
+_ID_RELATION_MAP: dict[Relation, str] = {
+    Relation.ASSIGNEE: "assignee_id",
+    Relation.REVIEWER: "reviewer_id",
+}
+
 
 def _iter_pages(
     gl: gitlab.Gitlab,
@@ -111,6 +130,126 @@ def fetch_items(
             f"allowed kinds: {allowed}"
         )
     params = _make_params({relation.value: username})
+    return [
+        IssueRef.from_api(p, type=kind.type_name)
+        for p in _iter_pages(gl, params, page_size, path=kind.path)
+    ]
+
+
+def resolve_user_ids(
+    gl: gitlab.Gitlab,
+    username: str,
+    page_size: int = 100,
+    max_total: int = 100,
+) -> list[int]:
+    """把 username 解析为对应的用户 ID 列表。
+
+    通过 `GET /users?username=X` 拉取。GitLab 中同一个 username 可能对应多个
+    账号（外部用户 / bot / 重名），所以这里返回 list 而非单值。
+
+    找不到（空响应）时返回 []，由调用方决定如何处理。
+    """
+    if not username:
+        return []
+    out: list[int] = []
+    page = 1
+    while len(out) < max_total:
+        chunk = safe_http_get(
+            gl,
+            "/users",
+            **{
+                "username": username,
+                "page": page,
+                "per_page": page_size,
+            },
+        )
+        if not chunk:
+            break
+        for u in chunk:
+            uid = u.get("id")
+            if uid is not None:
+                out.append(int(uid))
+        if len(chunk) < page_size:
+            break
+        page += 1
+        if len(out) >= max_total:
+            out = out[:max_total]
+            break
+    return out
+
+
+def fetch_items_by_user_id(
+    gl: gitlab.Gitlab,
+    user_ids: Sequence[int],
+    relation: Relation,
+    kind: ItemKind,
+    page_size: int = 100,
+) -> list[IssueRef]:
+    """按 user_id + relation + kind 拉取 item 列表。
+
+    用于补齐多 assignee / 多 reviewer 场景：
+    GitLab API 中 `assignee_username=X` / `reviewer_username=X` 只命中「主」
+    指派人/审查人；当一个 issue/MR 存在多个 assignee/reviewer 时，只有走
+    `assignee_id={id}` / `reviewer_id={id}` 才能命中「X 是众多 assignee/reviewer
+    之一」的情况。
+
+    支持的 relation：ASSIGNEE / REVIEWER（其余关系无 ID 维度等价物）。
+    """
+    if relation not in _ID_RELATION_MAP:
+        raise ValueError(
+            f"relation {relation.value!r} has no id-based query; "
+            f"allowed: {sorted(r.value for r in _ID_RELATION_MAP)}"
+        )
+    if kind not in _RELATION_ITEM_KIND_COMPAT[relation]:
+        allowed = sorted(k.type_name for k in _RELATION_ITEM_KIND_COMPAT[relation])
+        raise ValueError(
+            f"relation {relation.value!r} is not valid for kind {kind.type_name!r}; "
+            f"allowed kinds: {allowed}"
+        )
+    if not user_ids:
+        return []
+    id_param = _ID_RELATION_MAP[relation]
+    out: list[IssueRef] = []
+    # GitLab API 限制：单次请求 id 类参数只接受一个值（不支持 OR 数组）。
+    # 因此对每个 ID 各发一次拉取，调用方（app.py）负责去重合并。
+    for uid in user_ids:
+        params = _make_params({id_param: uid})
+        out.extend(
+            IssueRef.from_api(p, type=kind.type_name)
+            for p in _iter_pages(gl, params, page_size, path=kind.path)
+        )
+    return out
+
+
+def fetch_subscribed(
+    gl: gitlab.Gitlab,
+    kind: ItemKind,
+    page_size: int = 100,
+) -> list[IssueRef]:
+    """拉取当前 Token 持有者订阅的 items。
+
+    走 `?subscribed=true` —— GitLab 该参数只识别 Token 持有者本人，**与查询
+    username 无关**。如需查别人，请用对方的 Token。
+    """
+    params = _make_params({"subscribed": "true"})
+    return [
+        IssueRef.from_api(p, type=kind.type_name)
+        for p in _iter_pages(gl, params, page_size, path=kind.path)
+    ]
+
+
+def fetch_reacted(
+    gl: gitlab.Gitlab,
+    emoji: str = REACTION_EMOJI_DEFAULT,
+    kind: ItemKind = ItemKind.ISSUE,
+    page_size: int = 100,
+) -> list[IssueRef]:
+    """拉取当前 Token 持有者用给定 emoji 反应过的 items。
+
+    走 `?my_reaction_emoji={emoji}`。该参数只识别 Token 持有者本人。
+    `emoji` 默认 thumbsup，可由调用方覆盖。
+    """
+    params = _make_params({"my_reaction_emoji": emoji})
     return [
         IssueRef.from_api(p, type=kind.type_name)
         for p in _iter_pages(gl, params, page_size, path=kind.path)

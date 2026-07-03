@@ -12,12 +12,19 @@ import pytest
 import responses
 
 from gitlab_issues_finder.queries import (
+    EXTRA_REACTION,
+    EXTRA_SUBSCRIBED,
+    REACTION_EMOJI_DEFAULT,
     ItemKind,
     Relation,
     dedupe,
     fetch_items,
+    fetch_items_by_user_id,
     fetch_labeled,
+    fetch_reacted,
+    fetch_subscribed,
     fetch_users,
+    resolve_user_ids,
 )
 from tests.conftest import load_fixture
 
@@ -466,3 +473,219 @@ class TestFetchLabeledKind:
         _add_paginated_endpoint(responses, "/merge_requests", [load_fixture("mr_labeled.json")])
         result = fetch_labeled(gl, ["bug"], 100, kind=ItemKind.MERGE_REQUEST)
         assert all(it.type == "merge_request" for it in result)
+
+
+class TestResolveUserIds:
+    """username -> [user_id, ...] via /users?username=X."""
+
+    @responses.activate
+    def test_single_user(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/users",
+            json=[{"id": 42, "username": "alice"}],
+            status=200,
+            match_querystring=False,
+        )
+        result = resolve_user_ids(gl, "alice")
+        assert result == [42]
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs["username"] == ["alice"]
+
+    @responses.activate
+    def test_multiple_accounts_same_username(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/users",
+            json=[
+                {"id": 1, "username": "alice"},
+                {"id": 2, "username": "alice"},
+            ],
+            status=200,
+            match_querystring=False,
+        )
+        result = resolve_user_ids(gl, "alice")
+        assert result == [1, 2]
+
+    @responses.activate
+    def test_not_found_returns_empty(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/users",
+            json=[],
+            status=200,
+            match_querystring=False,
+        )
+        assert resolve_user_ids(gl, "ghost") == []
+
+    def test_empty_username_returns_empty(self, gl):
+        assert resolve_user_ids(gl, "") == []
+
+
+class TestFetchItemsByUserId:
+    """id-based query for the multi-assignee / multi-reviewer case."""
+
+    @responses.activate
+    def test_assignee_id_issue(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/issues",
+            json=load_fixture("issues_assigned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        result = fetch_items_by_user_id(gl, [42], Relation.ASSIGNEE, ItemKind.ISSUE)
+        assert len(result) == 2
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs["assignee_id"] == ["42"]
+        assert last_qs["state"] == ["opened"]
+        assert last_qs["with_membership"] == ["false"]
+
+    @responses.activate
+    def test_assignee_id_mr(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/merge_requests",
+            json=load_fixture("mr_mentioned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        result = fetch_items_by_user_id(
+            gl, [42], Relation.ASSIGNEE, ItemKind.MERGE_REQUEST
+        )
+        assert len(result) == 2
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs["assignee_id"] == ["42"]
+
+    @responses.activate
+    def test_reviewer_id_mr(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/merge_requests",
+            json=load_fixture("mr_mentioned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        result = fetch_items_by_user_id(
+            gl, [42], Relation.REVIEWER, ItemKind.MERGE_REQUEST
+        )
+        assert len(result) == 2
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs["reviewer_id"] == ["42"]
+
+    def test_reviewer_rejected_for_issue(self, gl):
+        with pytest.raises(ValueError, match="not valid for kind"):
+            fetch_items_by_user_id(gl, [42], Relation.REVIEWER, ItemKind.ISSUE)
+
+    def test_mention_not_supported(self, gl):
+        with pytest.raises(ValueError, match="has no id-based query"):
+            fetch_items_by_user_id(gl, [42], Relation.MENTION, ItemKind.ISSUE)
+
+    def test_empty_user_ids_returns_empty(self, gl):
+        assert fetch_items_by_user_id(gl, [], Relation.ASSIGNEE, ItemKind.ISSUE) == []
+
+    @responses.activate
+    def test_multiple_user_ids_makes_one_call_each(self, gl):
+        for _ in range(2):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=load_fixture("issues_assigned.json"),
+                status=200,
+                match_querystring=False,
+            )
+        result = fetch_items_by_user_id(
+            gl, [1, 2], Relation.ASSIGNEE, ItemKind.ISSUE
+        )
+        assert len(result) == 4
+        assignee_ids = [
+            parse_qs(urlparse(c.request.url).query)["assignee_id"]
+            for c in responses.calls
+        ]
+        assert assignee_ids == [["1"], ["2"]]
+
+
+class TestFetchSubscribed:
+    """/issues?subscribed=true and /merge_requests?subscribed=true."""
+
+    @responses.activate
+    def test_issue_subscribed(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/issues",
+            json=load_fixture("issues_assigned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        result = fetch_subscribed(gl, ItemKind.ISSUE)
+        assert len(result) == 2
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs["subscribed"] == ["true"]
+        assert last_qs["state"] == ["opened"]
+        assert last_qs["with_membership"] == ["false"]
+
+    @responses.activate
+    def test_mr_subscribed(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/merge_requests",
+            json=load_fixture("mr_mentioned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        result = fetch_subscribed(gl, ItemKind.MERGE_REQUEST)
+        assert len(result) == 2
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs["subscribed"] == ["true"]
+
+
+class TestFetchReacted:
+    """/issues?my_reaction_emoji=... and /merge_requests?my_reaction_emoji=..."""
+
+    def test_default_emoji_is_thumbsup(self):
+        assert REACTION_EMOJI_DEFAULT == "thumbsup"
+        assert EXTRA_REACTION == "reaction"
+        assert EXTRA_SUBSCRIBED == "subscribed"
+
+    @responses.activate
+    def test_issue_default_thumbsup(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/issues",
+            json=load_fixture("issues_assigned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        result = fetch_reacted(gl, kind=ItemKind.ISSUE)
+        assert len(result) == 2
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs["my_reaction_emoji"] == ["thumbsup"]
+
+    @responses.activate
+    def test_custom_emoji(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/issues",
+            json=load_fixture("issues_assigned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        result = fetch_reacted(gl, "heart", kind=ItemKind.ISSUE)
+        assert len(result) == 2
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs["my_reaction_emoji"] == ["heart"]
+
+    @responses.activate
+    def test_mr_kind(self, gl):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/merge_requests",
+            json=load_fixture("mr_mentioned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        result = fetch_reacted(gl, kind=ItemKind.MERGE_REQUEST)
+        assert len(result) == 2
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs["my_reaction_emoji"] == ["thumbsup"]
+        assert "/merge_requests" in responses.calls[-1].request.url

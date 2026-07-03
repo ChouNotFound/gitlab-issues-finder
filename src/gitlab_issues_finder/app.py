@@ -45,12 +45,19 @@ from gitlab_issues_finder.middleware import RequestIDMiddleware, SecurityHeaders
 from gitlab_issues_finder.models import IssueRef
 from gitlab_issues_finder.project_resolver import resolve as resolve_projects
 from gitlab_issues_finder.queries import (
+    EXTRA_REACTION,
+    EXTRA_SUBSCRIBED,
+    REACTION_EMOJI_DEFAULT,
     ItemKind,
     Relation,
     dedupe,
     fetch_items,
+    fetch_items_by_user_id,
     fetch_labeled,
+    fetch_reacted,
+    fetch_subscribed,
     fetch_users,
+    resolve_user_ids,
 )
 from gitlab_issues_finder.rate_limit import get_default_limiter
 
@@ -178,6 +185,142 @@ def _validate_username(raw: str) -> str | None:
     return raw
 
 
+# ----- 维度 / 统计常量 -----
+# 综述 stat row 顺序与图标。键名 = key_to_reasons 中的 reason 字符串。
+ISSUE_STAT_KEYS: list[tuple[str, str, str]] = [
+    ("assignee", "指派给我", "🟦"),
+    ("mention", "@我", "💬"),
+    ("author", "我创建", "✏️"),
+    (EXTRA_SUBSCRIBED, "我订阅", "🔔"),
+    (EXTRA_REACTION, "我反应", "👍"),
+]
+MR_STAT_KEYS: list[tuple[str, str, str]] = [
+    ("assignee", "指派给我", "🟦"),
+    ("mention", "@我", "💬"),
+    ("author", "我创建", "✏️"),
+    ("reviewer", "审查我", "👀"),
+    (EXTRA_SUBSCRIBED, "我订阅", "🔔"),
+    (EXTRA_REACTION, "我反应", "👍"),
+]
+
+
+# ----- 数据装配 helper -----
+def _load_user_items(
+    gl,
+    username: str,
+    page_size: int,
+    label_list: list[str] | None = None,
+    reaction_emoji: str = REACTION_EMOJI_DEFAULT,
+):
+    """一站式拉取与 username 相关的所有 items 及 reason 标签。
+
+    覆盖维度：
+      1. 标准 4 类关系 (issue: 3, MR: 4) —— 按 username
+      2. 多 assignee / 多 reviewer —— 按 user_id (补齐 GitLab 13+ 场景)
+      3. subscribed (Token 持有者)
+      4. reaction (Token 持有者，可指定 emoji)
+      5. labels AND 过滤 (可选)
+
+    返回 dict，键：
+      - all_items: 去重后的全集 (包含 labels 命中的项)
+      - issue_lists / mr_lists: 每个 relation 对应的列表
+      - subscribed / reacted: 单独的列表
+      - key_to_reasons: {(type, project_id, iid): [reason, ...]}
+    """
+    label_list = list(label_list or [])
+
+    # ---- 1) username-based 拉取 ----
+    issue_lists: dict[str, list[IssueRef]] = {
+        rel.value: list(
+            fetch_items(gl, username, rel, ItemKind.ISSUE, page_size)
+        )
+        for rel in (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR)
+    }
+    mr_lists: dict[str, list[IssueRef]] = {
+        rel.value: list(
+            fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, page_size)
+        )
+        for rel in (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR, Relation.REVIEWER)
+    }
+
+    # ---- 2) 多 assignee / reviewer (按 user_id) ----
+    user_ids = resolve_user_ids(gl, username)
+    if user_ids:
+        issue_lists[Relation.ASSIGNEE.value] = dedupe(
+            issue_lists[Relation.ASSIGNEE.value],
+            fetch_items_by_user_id(
+                gl, user_ids, Relation.ASSIGNEE, ItemKind.ISSUE, page_size
+            ),
+        )
+        mr_lists[Relation.ASSIGNEE.value] = dedupe(
+            mr_lists[Relation.ASSIGNEE.value],
+            fetch_items_by_user_id(
+                gl, user_ids, Relation.ASSIGNEE, ItemKind.MERGE_REQUEST, page_size
+            ),
+        )
+        mr_lists[Relation.REVIEWER.value] = dedupe(
+            mr_lists[Relation.REVIEWER.value],
+            fetch_items_by_user_id(
+                gl, user_ids, Relation.REVIEWER, ItemKind.MERGE_REQUEST, page_size
+            ),
+        )
+
+    # ---- 3) subscribed ----
+    subscribed: list[IssueRef] = dedupe(
+        fetch_subscribed(gl, ItemKind.ISSUE, page_size),
+        fetch_subscribed(gl, ItemKind.MERGE_REQUEST, page_size),
+    )
+
+    # ---- 4) reaction ----
+    reacted: list[IssueRef] = dedupe(
+        fetch_reacted(gl, reaction_emoji, ItemKind.ISSUE, page_size),
+        fetch_reacted(gl, reaction_emoji, ItemKind.MERGE_REQUEST, page_size),
+    )
+
+    # ---- 5) labels (AND 关系) ----
+    issues_labeled: list[IssueRef] = []
+    mrs_labeled: list[IssueRef] = []
+    if label_list:
+        issues_labeled = fetch_labeled(gl, label_list, page_size)
+        mrs_labeled = fetch_labeled(
+            gl, label_list, page_size, kind=ItemKind.MERGE_REQUEST
+        )
+
+    # ---- 组装 key_to_reasons ----
+    key_to_reasons: dict[tuple[str, int, int], list[str]] = {}
+    for reason, lst in {**issue_lists, **mr_lists}.items():
+        for it in lst:
+            key_to_reasons.setdefault(it.key, []).append(reason)
+    for it in subscribed:
+        key_to_reasons.setdefault(it.key, []).append(EXTRA_SUBSCRIBED)
+    for it in reacted:
+        key_to_reasons.setdefault(it.key, []).append(EXTRA_REACTION)
+    if label_list:
+        for it in issues_labeled:
+            key_to_reasons.setdefault(it.key, []).append("label")
+        for it in mrs_labeled:
+            key_to_reasons.setdefault(it.key, []).append("label")
+
+    # ---- 合并并去重 all_items ----
+    all_items = dedupe(
+        *issue_lists.values(),
+        *mr_lists.values(),
+        subscribed,
+        reacted,
+        issues_labeled,
+        mrs_labeled,
+    )
+
+    return {
+        "all_items": all_items,
+        "issue_lists": issue_lists,
+        "mr_lists": mr_lists,
+        "subscribed": subscribed,
+        "reacted": reacted,
+        "key_to_reasons": key_to_reasons,
+    }
+
+
 # ----- HTML 路由 -----
 @app.get("/", response_class=HTMLResponse, tags=["UI"])
 async def index(request: Request) -> HTMLResponse:
@@ -231,30 +374,10 @@ async def search(
     cfg = AppConfig.from_env()
     gl = build_client(cfg)
 
-    issue_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR)
-    issue_lists: dict[str, list[IssueRef]] = {
-        rel.value: fetch_items(gl, username, rel, ItemKind.ISSUE, cfg.page_size)
-        for rel in issue_relations
-    }
-    mr_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR, Relation.REVIEWER)
-    mr_lists: dict[str, list[IssueRef]] = {
-        rel.value: fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, cfg.page_size)
-        for rel in mr_relations
-    }
+    loaded = _load_user_items(gl, username, cfg.page_size, label_list=label_list)
+    all_items = _filter_by_time(loaded["all_items"], s_date, u_date)
+    key_to_reasons = loaded["key_to_reasons"]
 
-    issues_labeled: list[IssueRef] = []
-    mrs_labeled: list[IssueRef] = []
-    if label_list:
-        issues_labeled = fetch_labeled(gl, label_list, cfg.page_size)
-        mrs_labeled = fetch_labeled(gl, label_list, cfg.page_size, kind=ItemKind.MERGE_REQUEST)
-
-    all_items = dedupe(
-        *issue_lists.values(),
-        *mr_lists.values(),
-        issues_labeled,
-        mrs_labeled,
-    )
-    all_items = _filter_by_time(all_items, s_date, u_date)
     # 解析项目名（用于模板显示）
     project_info: dict = {}
     try:
@@ -273,20 +396,8 @@ async def search(
     issues = [it for it in all_items if it.type == "issue"]
     merge_requests = [it for it in all_items if it.type == "merge_request"]
 
-    labeled_issue_keys = {it.key for it in issues_labeled}
-    labeled_mr_keys = {it.key for it in mrs_labeled}
-
     def compute_reasons(item: IssueRef) -> list[str]:
-        reasons: list[str] = []
-        bucket = issue_lists if item.type == "issue" else mr_lists
-        for reason, lst in bucket.items():
-            if any(it.key == item.key for it in lst):
-                reasons.append(reason)
-        if label_list:
-            labeled = labeled_issue_keys if item.type == "issue" else labeled_mr_keys
-            if item.key in labeled:
-                reasons.append("label")
-        return reasons
+        return list(key_to_reasons.get(item.key, []))
 
     issues.sort(key=lambda it: it.updated_at, reverse=True)
     merge_requests.sort(key=lambda it: it.updated_at, reverse=True)
@@ -354,6 +465,8 @@ async def board(
                 "theme": "auto",
                 "filter_q": "",
                 "project_info": {},
+                "ISSUE_STAT_KEYS": ISSUE_STAT_KEYS,
+                "MR_STAT_KEYS": MR_STAT_KEYS,
             },
         )
 
@@ -373,36 +486,11 @@ async def board(
     cfg = AppConfig.from_env()
     gl = build_client(cfg)
 
-    issue_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR)
-    issue_lists: dict[str, list[IssueRef]] = {
-        rel.value: fetch_items(gl, username, rel, ItemKind.ISSUE, cfg.page_size)
-        for rel in issue_relations
-    }
-    mr_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR, Relation.REVIEWER)
-    mr_lists: dict[str, list[IssueRef]] = {
-        rel.value: fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, cfg.page_size)
-        for rel in mr_relations
-    }
-
-    issues_labeled: list[IssueRef] = []
-    mrs_labeled: list[IssueRef] = []
     label_list = [s.strip() for s in q.split(",") if s.strip()] if q else []
-    if label_list:
-        issues_labeled = fetch_labeled(gl, label_list, cfg.page_size)
-        mrs_labeled = fetch_labeled(gl, label_list, cfg.page_size, kind=ItemKind.MERGE_REQUEST)
+    loaded = _load_user_items(gl, username, cfg.page_size, label_list=label_list)
+    all_items = _filter_by_time(loaded["all_items"], s_date_b, u_date_b)
+    key_to_reasons = loaded["key_to_reasons"]
 
-    key_to_reasons: dict[tuple[str, int, int], list[str]] = {}
-    for reason, lst in {**issue_lists, **mr_lists}.items():
-        for it in lst:
-            key_to_reasons.setdefault(it.key, []).append(reason)
-
-    all_items = dedupe(
-        *issue_lists.values(),
-        *mr_lists.values(),
-        issues_labeled,
-        mrs_labeled,
-    )
-    all_items = _filter_by_time(all_items, s_date_b, u_date_b)
     # 解析项目名（用于模板显示）
     board_project_info: dict = {}
     try:
@@ -411,9 +499,10 @@ async def board(
     except AppError:
         pass
     logger.info(
-        "search result",
+        "board result",
         extra={
             "username": username,
+            "view": view,
             "issue_count": sum(1 for it in all_items if it.type == "issue"),
             "mr_count": sum(1 for it in all_items if it.type == "merge_request"),
         },
@@ -501,6 +590,8 @@ async def board(
             "theme": storage.get_theme(dbp, username),
             "filter_q": q,
             "project_info": board_project_info,
+            "ISSUE_STAT_KEYS": ISSUE_STAT_KEYS,
+            "MR_STAT_KEYS": MR_STAT_KEYS,
         },
     )
 
@@ -512,9 +603,29 @@ def _empty_summary() -> dict:
         "mrs": 0,
         "projects": 0,
         "by_relation": {"reviewer": 0, "assignee": 0, "mention": 0, "author": 0, "other": 0},
+        "by_relation_counts": {
+            "issues": {
+                "assignee": 0, "mention": 0, "author": 0,
+                EXTRA_SUBSCRIBED: 0, EXTRA_REACTION: 0,
+            },
+            "mrs": {
+                "assignee": 0, "mention": 0, "author": 0, "reviewer": 0,
+                EXTRA_SUBSCRIBED: 0, EXTRA_REACTION: 0,
+            },
+        },
         "by_project": [],
         "most_recent": None,
     }
+
+
+def _count_by_relation(items, key_to_reasons, dimensions):
+    counts = {d: 0 for d in dimensions}
+    for it in items:
+        reasons = set(key_to_reasons.get(it.key, []))
+        for d in dimensions:
+            if d in reasons:
+                counts[d] += 1
+    return counts
 
 
 def _compute_summary(
@@ -543,12 +654,19 @@ def _compute_summary(
         reverse=True,
     )[:10]
     most_recent = max(all_items, key=lambda it: it.updated_at)
+    issue_dims = [k for k, _, _ in ISSUE_STAT_KEYS]
+    mr_dims = [k for k, _, _ in MR_STAT_KEYS]
+    by_relation_counts = {
+        "issues": _count_by_relation(issues, key_to_reasons, issue_dims),
+        "mrs": _count_by_relation(mrs, key_to_reasons, mr_dims),
+    }
     return {
         "total": len(all_items),
         "issues": len(issues),
         "mrs": len(mrs),
         "projects": len(items_by_proj),
         "by_relation": by_rel,
+        "by_relation_counts": by_relation_counts,
         "by_project": by_proj,
         "most_recent": most_recent,
     }
@@ -627,42 +745,11 @@ async def api_items(
     cfg = AppConfig.from_env()
     gl = build_client(cfg)
     effective_ps = page_size if page_size > 0 else cfg.page_size
-    issue_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR)
-    issue_lists: dict[str, list[IssueRef]] = {
-        rel.value: fetch_items(gl, username, rel, ItemKind.ISSUE, effective_ps)
-        for rel in issue_relations
-    }
-    mr_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR, Relation.REVIEWER)
-    mr_lists: dict[str, list[IssueRef]] = {
-        rel.value: fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, effective_ps)
-        for rel in mr_relations
-    }
-    issues_labeled: list[IssueRef] = []
-    mrs_labeled: list[IssueRef] = []
-    if label_list:
-        issues_labeled = fetch_labeled(gl, label_list, effective_ps)
-        mrs_labeled = fetch_labeled(gl, label_list, effective_ps, kind=ItemKind.MERGE_REQUEST)
-    all_items = dedupe(
-        *issue_lists.values(),
-        *mr_lists.values(),
-        issues_labeled,
-        mrs_labeled,
-    )
-    all_items = _filter_by_time(all_items, s_date, u_date)
-    labeled_keys: set[tuple[str, int, int]] = set()
-    for it in issues_labeled:
-        labeled_keys.add(it.key)
-    for it in mrs_labeled:
-        labeled_keys.add(it.key)
+    loaded = _load_user_items(gl, username, effective_ps, label_list=label_list)
+    all_items = _filter_by_time(loaded["all_items"], s_date, u_date)
+    key_to_reasons = loaded["key_to_reasons"]
     out = []
     for it in all_items:
-        reasons: list[str] = []
-        bucket = issue_lists if it.type == "issue" else mr_lists
-        for rel, lst in bucket.items():
-            if any(x.key == it.key for x in lst):
-                reasons.append(rel)
-        if label_list and it.key in labeled_keys:
-            reasons.append("label")
         out.append(
             {
                 "type": it.type,
@@ -674,7 +761,7 @@ async def api_items(
                 "labels": list(it.labels),
                 "assignee": it.assignee,
                 "updated_at": it.updated_at,
-                "reasons": reasons,
+                "reasons": list(key_to_reasons.get(it.key, [])),
             }
         )
     return JSONResponse({"count": len(out), "items": out})
@@ -997,21 +1084,8 @@ def _collect_export_items(username: str, labels_raw: str) -> list[IssueRef]:
     cfg = AppConfig.from_env()
     gl = build_client(cfg)
     label_list = [s.strip() for s in labels_raw.split(",") if s.strip()]
-    issue_lists = {
-        rel.value: fetch_items(gl, username, rel, ItemKind.ISSUE, cfg.page_size)
-        for rel in (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR)
-    }
-    mr_lists = {
-        rel.value: fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, cfg.page_size)
-        for rel in (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR, Relation.REVIEWER)
-    }
-    issues_labeled = fetch_labeled(gl, label_list, cfg.page_size) if label_list else []
-    mrs_labeled = (
-        fetch_labeled(gl, label_list, cfg.page_size, kind=ItemKind.MERGE_REQUEST)
-        if label_list
-        else []
-    )
-    return dedupe(*issue_lists.values(), *mr_lists.values(), issues_labeled, mrs_labeled)
+    loaded = _load_user_items(gl, username, cfg.page_size, label_list=label_list)
+    return loaded["all_items"]
 
 
 @app.get("/api/export.csv", tags=["Export"])

@@ -32,6 +32,21 @@ def _disable_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RATE_LIMIT_RPM", "0")
 
 
+@pytest.fixture(autouse=True)
+def _disable_extra_dimensions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认让新增维度 (subscribed / reaction / 多 assignee id) 走空响应。
+
+    旧测试用 responses 库只注册了 7 个原维度端点，没有为新维度注册。
+    缺省把新维度置空可让旧测试照常跑；专门测新维度的测试用本地 monkeypatch 覆盖。
+    """
+    from gitlab_issues_finder import app as app_module
+
+    monkeypatch.setattr(app_module, "resolve_user_ids", lambda gl, username, **kw: [])
+    monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+    monkeypatch.setattr(app_module, "fetch_subscribed", lambda *a, **kw: [])
+    monkeypatch.setattr(app_module, "fetch_reacted", lambda *a, **kw: [])
+
+
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """清空所有相关环境变量，模拟全新环境。"""

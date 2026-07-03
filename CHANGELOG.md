@@ -7,6 +7,43 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- New participation dimensions: `subscribed` (Token holder) and
+  `my_reaction_emoji` (default `thumbsup`, override via `?reaction=...`).
+  Items found by these dimensions appear in the existing views and
+  the new stat row.
+- Multi-assignee / multi-reviewer support: `assignee_username` /
+  `reviewer_username` only hit the primary assignee/reviewer; the
+  helper now also pulls by `assignee_id` / `reviewer_id` (resolved
+  via `GET /users?username=X`) so an item where the user is one of
+  many assignees/reviewers is correctly included.
+- Per-dimension stat row on the board summary view: 5 issues + 6 mrs
+  pills, each showing the OR-accumulated count for that dimension
+  (assignee / mention / author / reviewer / subscribed / reaction).
+  The numbers come from the new `summary.by_relation_counts` field
+  (also surfaced via `/api/items`).
+- New `query_emoji` constant in `gitlab_issues_finder.queries` for the
+  default reaction emoji.
+
+### Changed
+- UI reworked to a Codex-inspired visual language: blue accent (was
+  orange), larger rounded corners (10–18px vs 4–10px), calmer light
+  theme, near-black dark theme. Light / dark / auto theme switching
+  retained.
+- `_compute_summary` / `_empty_summary` now return a
+  `by_relation_counts` field in addition to the existing `by_relation`
+  (which is the mutually-exclusive bucket count for the Kanban view).
+- `tests/conftest.py` autouse fixture stubs the new fetchers to `[]`
+  in tests that do not explicitly opt in, so pre-existing tests do
+  not have to register new GitLab API responses.
+
+### Note
+- `subscribed` and `my_reaction_emoji` are scoped to the **Token
+  holder**, not the queried `username`. To inspect someone else's
+  subscriptions / reactions, use their Personal Access Token.
+
+## [Unreleased] - previous
+
+### Added
 - FastAPI lifespan context manager replaces the deprecated
   @app.on_event("startup") hook.
 - .gitattributes with text=auto and per-extension eol rules so Windows

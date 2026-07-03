@@ -6,15 +6,15 @@
 
 ## ✨ 特性
 
-- 🔍 **多维筛选**：assignee / mention / author 三维度（MR 额外 reviewer） 同时拉取，去重合并
+- 🔍 **多维筛选**：assignee / mention / author / reviewer / subscribed / reaction 维度同时拉取，多 assignee / reviewer 走 user_id 补齐
 - 🏷️ **自选标签**：逗号分隔多标签，AND 关系精确过滤
 - 🗂️ **看板视图**：5 列 Kanban + 自定义列、拖拽改分桶、列名可改、列可删可加、列可重排
 - 🔍 **看板内搜索**：标题实时搜索 + 5 种排序（更新/IID/标题）
 - 📅 **时间范围**：since/until 按 updated_at 过滤
 - 📤 **数据导出**：CSV / Markdown 表格一键导出（贴周报 / PR）
-- 🎨 **现代 UI**：仿 Linear / GitLab / Trello 设计风格，CSS 变量主题切换 (Light/Dark/Auto)
+- 🎨 **现代 UI**：Codex 桌面端视觉风格（蓝强调色 / 圆角 10–18px / 留白更宽），CSS 变量主题切换 (Light/Dark/Auto)
 - 💾 **本地持久化**：SQLite 存看板状态、用户偏好、最近访问用户
-- 🧪 **完整测试**：88 个单元测试，覆盖配置、查询、客户端、Web 路由、看板 API、存储层
+- 🧪 **完整测试**：覆盖配置、查询、客户端、Web 路由、看板 API、存储层；含 17 个新维度单元测试
 
 ## 🚀 快速开始
 
@@ -89,7 +89,7 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 | 需我动 | `assignee_username=X` |
 | @我的 | `mention_username=X` |
 | 我创建的 | `author_username=X` |
-| 其他参与 | 兜底（未匹配上述任一维度） |
+| 其他参与 | 兜底（未匹配上述任一维度；subscribed / reaction 命中项也落这里） |
 
 **特性**：
 - 拖拽卡片到任意列 → 立即持久化到 SQLite
@@ -146,6 +146,15 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 | `LOG_JSON` | | `0` | `1` 启用 JSON 格式（便于接入 Loki/ELK） |
 | `RATE_LIMIT_RPM` | | `60` | 每 IP 每分钟请求上限；`0` 关闭限流 |
 | `RATE_LIMIT_BURST` | | `=RATE_LIMIT_RPM` | 令牌桶容量 |
+
+## 🔑 Token 与 username 的关系
+
+仓库按 `username` 拉取 assignee / mention / author / reviewer / labels 5 个维度；这些都是「以 username 为查询参数」的接口，与 Token 持有者身份无关。
+
+但 GitLab API 中 `subscribed` 和 `my_reaction_emoji` 这两个参数是**以 Token 持有者为口径**的——即 `?subscribed=true` 返回的是当前 Token 持有者订阅的 items，与查询里填的 `username` 解耦。所以：
+
+- 想看自己订阅了哪些 / 自己点过 👍 的：用你自己的 Token + 自己的 username，结果是 Token 持有者的数据。
+- 想看别人订阅了哪些：需要用对方的 Token + 对方的 username。
 
 ## 🔐 SSL 自签名证书
 
