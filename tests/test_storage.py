@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -108,6 +107,7 @@ class TestPreferences:
 class TestInit:
     def test_init_creates_schema(self, tmp_path: Path):
         from gitlab_issues_finder.storage import _connect
+
         dbp = tmp_path / "x.db"
         storage.init_db(dbp)
         # 验证表已创建

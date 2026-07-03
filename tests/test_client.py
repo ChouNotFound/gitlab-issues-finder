@@ -121,8 +121,13 @@ class TestSafeHttpGetErrors:
 class TestSslVerify:
     def test_ssl_verify_bool(self):
         cfg = AppConfig(
-            url="https://gl", token="x", ssl_verify=False,
-            timeout=30, web_host="127.0.0.1", web_port=8000, page_size=100,
+            url="https://gl",
+            token="x",
+            ssl_verify=False,
+            timeout=30,
+            web_host="127.0.0.1",
+            web_port=8000,
+            page_size=100,
         )
         gl = build_client(cfg)
         # python-gitlab 4.x 把 ssl_verify 存到自身属性
@@ -130,8 +135,13 @@ class TestSslVerify:
 
     def test_ssl_verify_path(self):
         cfg = AppConfig(
-            url="https://gl", token="x", ssl_verify="/path/to/ca.crt",
-            timeout=30, web_host="127.0.0.1", web_port=8000, page_size=100,
+            url="https://gl",
+            token="x",
+            ssl_verify="/path/to/ca.crt",
+            timeout=30,
+            web_host="127.0.0.1",
+            web_port=8000,
+            page_size=100,
         )
         gl = build_client(cfg)
         assert gl.ssl_verify == "/path/to/ca.crt"

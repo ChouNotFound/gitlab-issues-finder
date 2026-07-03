@@ -20,11 +20,11 @@ JSON API：
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
 
 from fastapi import Body, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -36,8 +36,6 @@ from gitlab_issues_finder.client import build_client
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.logging_setup import get_logger
-
-logger = get_logger(__name__)
 from gitlab_issues_finder.models import IssueRef
 from gitlab_issues_finder.queries import (
     ItemKind,
@@ -48,10 +46,13 @@ from gitlab_issues_finder.queries import (
     fetch_users,
 )
 
+logger = get_logger(__name__)
+
 # ----- 路径解析 -----
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _TEMPLATES_DIR = _PACKAGE_DIR / "templates"
 _STATIC_DIR = _PACKAGE_DIR / "static"
+
 
 # ----- App 生命周期：初始化 SQLite -----
 # FastAPI >=0.110 推荐用 lifespan context manager 替换 @app.on_event。
@@ -154,14 +155,19 @@ async def search(
         mrs_labeled = fetch_labeled(gl, label_list, cfg.page_size, kind=ItemKind.MERGE_REQUEST)
 
     all_items = dedupe(
-        *issue_lists.values(), *mr_lists.values(),
-        issues_labeled, mrs_labeled,
+        *issue_lists.values(),
+        *mr_lists.values(),
+        issues_labeled,
+        mrs_labeled,
     )
-    logger.info("search result", extra={
-        "username": username,
-        "issue_count": sum(1 for it in all_items if it.type == "issue"),
-        "mr_count": sum(1 for it in all_items if it.type == "merge_request"),
-    })
+    logger.info(
+        "search result",
+        extra={
+            "username": username,
+            "issue_count": sum(1 for it in all_items if it.type == "issue"),
+            "mr_count": sum(1 for it in all_items if it.type == "merge_request"),
+        },
+    )
     issues = [it for it in all_items if it.type == "issue"]
     merge_requests = [it for it in all_items if it.type == "merge_request"]
 
@@ -186,10 +192,8 @@ async def search(
     mrs_with_reasons = [(it, compute_reasons(it)) for it in merge_requests]
 
     # 更新最近使用
-    try:
+    with contextlib.suppress(Exception):
         storage.touch_user(cfg.db_path, username)
-    except Exception:
-        pass
 
     return templates.TemplateResponse(
         request,
@@ -279,14 +283,19 @@ async def board(
             key_to_reasons.setdefault(it.key, []).append(reason)
 
     all_items = dedupe(
-        *issue_lists.values(), *mr_lists.values(),
-        issues_labeled, mrs_labeled,
+        *issue_lists.values(),
+        *mr_lists.values(),
+        issues_labeled,
+        mrs_labeled,
     )
-    logger.info("search result", extra={
-        "username": username,
-        "issue_count": sum(1 for it in all_items if it.type == "issue"),
-        "mr_count": sum(1 for it in all_items if it.type == "merge_request"),
-    })
+    logger.info(
+        "search result",
+        extra={
+            "username": username,
+            "issue_count": sum(1 for it in all_items if it.type == "issue"),
+            "mr_count": sum(1 for it in all_items if it.type == "merge_request"),
+        },
+    )
 
     # ---- 关键修复保证：搜索跨越多项目时不漏 ----
     # all_items 中保留的是 GitLab API 返回的实际项目 ID 集合
@@ -295,7 +304,11 @@ async def board(
     # ---- 按"关系"分桶（与原 Kanban 列对齐） ----
     # 这里用 key_to_reasons 判断 item 命中维度
     items_by_rel: dict[str, list[IssueRef]] = {
-        "reviewer": [], "assignee": [], "mention": [], "author": [], "other": [],
+        "reviewer": [],
+        "assignee": [],
+        "mention": [],
+        "author": [],
+        "other": [],
     }
     for item in all_items:
         reasons = key_to_reasons.get(item.key, [])
@@ -336,9 +349,8 @@ async def board(
                 items_by_col[reason].append(item)
                 placed = True
                 break
-        if not placed:
-            if "other" in items_by_col:
-                items_by_col["other"].append(item)
+        if not placed and "other" in items_by_col:
+            items_by_col["other"].append(item)
     for lst in items_by_col.values():
         lst.sort(key=lambda it: it.updated_at, reverse=True)
     total = sum(len(v) for v in items_by_col.values())
@@ -346,10 +358,8 @@ async def board(
     # ---- 综述 ----
     summary = _compute_summary(all_items, key_to_reasons, items_by_proj)
 
-    try:
+    with contextlib.suppress(Exception):
         storage.touch_user(dbp, username)
-    except Exception:
-        pass
 
     return templates.TemplateResponse(
         request,
@@ -405,10 +415,7 @@ def _compute_summary(
         if not placed:
             by_rel["other"] += 1
     by_proj = sorted(
-        (
-            {"project_id": pid, "count": len(lst)}
-            for pid, lst in items_by_proj.items()
-        ),
+        ({"project_id": pid, "count": len(lst)} for pid, lst in items_by_proj.items()),
         key=lambda d: d["count"],
         reverse=True,
     )[:10]
@@ -535,8 +542,8 @@ async def api_preferences(payload: dict = Body(...)) -> JSONResponse:
         raise HTTPException(status_code=400, detail="missing username")
     try:
         storage.set_theme(_db_path(), username, theme)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="invalid theme")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="invalid theme") from e
     return JSONResponse({"ok": True, "theme": theme})
 
 
@@ -544,13 +551,17 @@ async def api_preferences(payload: dict = Body(...)) -> JSONResponse:
 @app.get("/api/version")
 async def api_version() -> JSONResponse:
     """返回应用版本与 Python / 关键依赖版本。便于部署后做版本核对。"""
-    from gitlab_issues_finder import __version__
     import sys
-    return JSONResponse({
-        "app": __version__,
-        "python": sys.version.split()[0],
-        "fastapi": __import__("fastapi").__version__,
-    })
+
+    from gitlab_issues_finder import __version__
+
+    return JSONResponse(
+        {
+            "app": __version__,
+            "python": sys.version.split()[0],
+            "fastapi": __import__("fastapi").__version__,
+        }
+    )
 
 
 @app.get("/api/health")

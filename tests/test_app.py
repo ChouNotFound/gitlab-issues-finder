@@ -42,22 +42,34 @@ class TestSearchRoute:
         # 注册足够多的响应以覆盖 9 次查询（3 issue 维度 + 4 mr 维度 + 2 labels）
         for _ in range(3):
             responses.add(
-                responses.GET, f"{API_BASE}/issues",
-                json=load_fixture("issues_assigned.json"), status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=load_fixture("issues_assigned.json"),
+                status=200,
+                match_querystring=False,
             )
         for _ in range(4):
             responses.add(
-                responses.GET, f"{API_BASE}/merge_requests",
-                json=load_fixture("mr_mentioned.json"), status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=load_fixture("mr_mentioned.json"),
+                status=200,
+                match_querystring=False,
             )
         # 2 次 labels 端点
         responses.add(
-            responses.GET, f"{API_BASE}/issues",
-            json=load_fixture("issues_labeled.json"), status=200, match_querystring=False,
+            responses.GET,
+            f"{API_BASE}/issues",
+            json=load_fixture("issues_labeled.json"),
+            status=200,
+            match_querystring=False,
         )
         responses.add(
-            responses.GET, f"{API_BASE}/merge_requests",
-            json=load_fixture("mr_labeled.json"), status=200, match_querystring=False,
+            responses.GET,
+            f"{API_BASE}/merge_requests",
+            json=load_fixture("mr_labeled.json"),
+            status=200,
+            match_querystring=False,
         )
 
         resp = client.post(
@@ -78,13 +90,19 @@ class TestSearchRoute:
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         for _ in range(4):
             responses.add(
-                responses.GET, f"{API_BASE}/merge_requests",
-                json=[], status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
             )
         for _ in range(3):
             responses.add(
-                responses.GET, f"{API_BASE}/issues",
-                json=[], status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[],
+                status=200,
+                match_querystring=False,
             )
         resp = client.post("/search", data={"username": "ghost"})
         assert resp.status_code == 200
@@ -97,13 +115,19 @@ class TestSearchRoute:
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         for _ in range(3):
             responses.add(
-                responses.GET, f"{API_BASE}/issues",
-                json=[], status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[],
+                status=200,
+                match_querystring=False,
             )
         for _ in range(4):
             responses.add(
-                responses.GET, f"{API_BASE}/merge_requests",
-                json=[], status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
             )
         resp = client.post("/search", data={"username": "alice"})
         assert resp.status_code == 200
@@ -121,13 +145,19 @@ class TestSearchRoute:
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         for _ in range(3):
             responses.add(
-                responses.GET, f"{API_BASE}/issues",
-                json=[], status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[],
+                status=200,
+                match_querystring=False,
             )
         for _ in range(4):
             responses.add(
-                responses.GET, f"{API_BASE}/merge_requests",
-                json=[], status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
             )
         resp = client.post("/search", data={"username": "alice", "labels": "  , , "})
         assert resp.status_code == 200
@@ -140,30 +170,45 @@ class TestSearchRoute:
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         for _ in range(3):
             responses.add(
-                responses.GET, f"{API_BASE}/issues",
-                json=[], status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[],
+                status=200,
+                match_querystring=False,
             )
         for _ in range(4):
             responses.add(
-                responses.GET, f"{API_BASE}/merge_requests",
-                json=[], status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
             )
         # 留 2 个额外响应给 labels
         responses.add(
-            responses.GET, f"{API_BASE}/issues",
-            json=[], status=200, match_querystring=False,
+            responses.GET,
+            f"{API_BASE}/issues",
+            json=[],
+            status=200,
+            match_querystring=False,
         )
         responses.add(
-            responses.GET, f"{API_BASE}/merge_requests",
-            json=[], status=200, match_querystring=False,
+            responses.GET,
+            f"{API_BASE}/merge_requests",
+            json=[],
+            status=200,
+            match_querystring=False,
         )
         resp = client.post(
             "/search",
             data={"username": "alice", "labels": "bug,priority::high"},
         )
         assert resp.status_code == 200
-        labels_qs = [parse_qs(q).get("labels") for q in (urlparse(c.request.url).query for c in responses.calls)]
-        assert any(l == ["bug,priority::high"] for l in labels_qs)
+        labels_qs = [
+            parse_qs(q).get("labels")
+            for q in (urlparse(c.request.url).query for c in responses.calls)
+        ]
+        assert any(lst == ["bug,priority::high"] for lst in labels_qs)
 
     def test_empty_username(self, client, tmp_db):
         resp = client.post("/search", data={"username": "   "})
@@ -182,8 +227,10 @@ class TestSearchRoute:
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         responses.add(
-            responses.GET, f"{API_BASE}/issues",
-            json={"message": "401 Unauthorized"}, status=401,
+            responses.GET,
+            f"{API_BASE}/issues",
+            json={"message": "401 Unauthorized"},
+            status=401,
         )
         resp = client.post("/search", data={"username": "alice"})
         assert resp.status_code == 200
@@ -197,6 +244,7 @@ class TestDbPathDecoupling:
         """没有 GITLAB_URL/TOKEN 时仍能读写看板状态。"""
         # 显式清掉（如果 clean_env 被设过）
         from gitlab_issues_finder.app import _db_path
+
         with __import__("pytest").MonkeyPatch().context() as m:
             for k in ("GITLAB_URL", "GITLAB_TOKEN"):
                 m.delenv(k, raising=False)
@@ -229,41 +277,71 @@ class TestBoardRoute:
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
 
-        reviewer_mr = [{
-            "project_id": 1, "iid": 11, "title": "Reviewer MR", "state": "opened",
-            "labels": [], "assignee": None,
-            "web_url": "https://gl/proj1/-/merge_requests/11",
-            "updated_at": "2026-07-02T10:00:00Z",
-        }]
-        assignee_mr = [{
-            "project_id": 2, "iid": 22, "title": "Assignee MR", "state": "opened",
-            "labels": [], "assignee": {"username": "alice"},
-            "web_url": "https://gl/proj2/-/merge_requests/22",
-            "updated_at": "2026-07-02T10:00:00Z",
-        }]
-        mention_mr = [{
-            "project_id": 3, "iid": 33, "title": "Mention MR", "state": "opened",
-            "labels": [], "assignee": None,
-            "web_url": "https://gl/proj3/-/merge_requests/33",
-            "updated_at": "2026-07-02T10:00:00Z",
-        }]
-        author_mr = [{
-            "project_id": 4, "iid": 44, "title": "Author MR", "state": "opened",
-            "labels": [], "assignee": None,
-            "web_url": "https://gl/proj4/-/merge_requests/44",
-            "updated_at": "2026-07-02T10:00:00Z",
-        }]
+        reviewer_mr = [
+            {
+                "project_id": 1,
+                "iid": 11,
+                "title": "Reviewer MR",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gl/proj1/-/merge_requests/11",
+                "updated_at": "2026-07-02T10:00:00Z",
+            }
+        ]
+        assignee_mr = [
+            {
+                "project_id": 2,
+                "iid": 22,
+                "title": "Assignee MR",
+                "state": "opened",
+                "labels": [],
+                "assignee": {"username": "alice"},
+                "web_url": "https://gl/proj2/-/merge_requests/22",
+                "updated_at": "2026-07-02T10:00:00Z",
+            }
+        ]
+        mention_mr = [
+            {
+                "project_id": 3,
+                "iid": 33,
+                "title": "Mention MR",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gl/proj3/-/merge_requests/33",
+                "updated_at": "2026-07-02T10:00:00Z",
+            }
+        ]
+        author_mr = [
+            {
+                "project_id": 4,
+                "iid": 44,
+                "title": "Author MR",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gl/proj4/-/merge_requests/44",
+                "updated_at": "2026-07-02T10:00:00Z",
+            }
+        ]
 
         # 默认视图 + relation 视图各需要 7 个 MR 维度查询（每次 request 都重新拉）
         for _ in range(7):
             responses.add(
-                responses.GET, f"{API_BASE}/issues",
-                json=[], status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[],
+                status=200,
+                match_querystring=False,
             )
         for payload in (assignee_mr, mention_mr, author_mr, reviewer_mr) * 2:
             responses.add(
-                responses.GET, f"{API_BASE}/merge_requests",
-                json=payload, status=200, match_querystring=False,
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=payload,
+                status=200,
+                match_querystring=False,
             )
 
         # 默认综述视图
@@ -296,6 +374,7 @@ class TestBoardRoute:
             return []
 
         from gitlab_issues_finder import app as app_module
+
         monkeypatch.setattr(app_module, "fetch_items", fake_fetch)
 
         resp = client.get("/board?username=alice")
@@ -309,9 +388,14 @@ class TestBoardApi:
     """看板 JSON API：拖拽、列管理、主题"""
 
     def test_move_and_reset(self, client, tmp_db):
-        r = client.post("/api/board/move", json={
-            "username": "alice", "item_key": "merge_request-1-1", "column_id": "reviewer",
-        })
+        r = client.post(
+            "/api/board/move",
+            json={
+                "username": "alice",
+                "item_key": "merge_request-1-1",
+                "column_id": "reviewer",
+            },
+        )
         assert r.status_code == 200
         assert r.json()["ok"] is True
         r = client.post("/api/board/reset", json={"username": "alice"})
@@ -319,13 +403,22 @@ class TestBoardApi:
 
     def test_add_rename_delete_column(self, client, tmp_db):
         client.get("/board?username=alice")
-        r = client.post("/api/board/columns", json={
-            "username": "alice", "title": "待 review", "column_id": "reviewing",
-        })
+        r = client.post(
+            "/api/board/columns",
+            json={
+                "username": "alice",
+                "title": "待 review",
+                "column_id": "reviewing",
+            },
+        )
         assert r.status_code == 200
-        r = client.patch("/api/board/columns/reviewing", json={
-            "username": "alice", "title": "需要 review",
-        })
+        r = client.patch(
+            "/api/board/columns/reviewing",
+            json={
+                "username": "alice",
+                "title": "需要 review",
+            },
+        )
         assert r.json()["ok"] is True
         # DELETE 在 Starlette TestClient 不接 json=，改用 request body raw
         r = client.request(
@@ -343,19 +436,32 @@ class TestBoardApi:
         assert r.status_code == 400
 
     def test_invalid_column_id(self, client, tmp_db):
-        r = client.post("/api/board/columns", json={
-            "username": "alice", "title": "x", "column_id": "BAD ID",
-        })
+        r = client.post(
+            "/api/board/columns",
+            json={
+                "username": "alice",
+                "title": "x",
+                "column_id": "BAD ID",
+            },
+        )
         assert r.status_code == 400
 
     def test_theme(self, client, tmp_db):
-        r = client.post("/api/preferences", json={
-            "username": "alice", "theme": "dark",
-        })
+        r = client.post(
+            "/api/preferences",
+            json={
+                "username": "alice",
+                "theme": "dark",
+            },
+        )
         assert r.json()["theme"] == "dark"
-        r = client.post("/api/preferences", json={
-            "username": "alice", "theme": "rainbow",
-        })
+        r = client.post(
+            "/api/preferences",
+            json={
+                "username": "alice",
+                "theme": "rainbow",
+            },
+        )
         assert r.status_code == 400
 
 
@@ -371,7 +477,8 @@ class TestApiUsers:
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         responses.add(
-            responses.GET, f"{API_BASE}/users",
+            responses.GET,
+            f"{API_BASE}/users",
             json=[
                 {"id": 1, "username": "alice", "name": "Alice"},
                 {"id": 2, "username": "bob", "name": "Bob"},
@@ -389,7 +496,8 @@ class TestApiUsers:
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         responses.add(
-            responses.GET, f"{API_BASE}/users",
+            responses.GET,
+            f"{API_BASE}/users",
             json=[
                 {"id": 1, "username": "alice", "name": "Alice"},
                 {"id": 2, "username": "", "name": "Ghost"},
@@ -406,8 +514,10 @@ class TestApiUsers:
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         responses.add(
-            responses.GET, f"{API_BASE}/users",
-            json={"message": "401"}, status=401,
+            responses.GET,
+            f"{API_BASE}/users",
+            json={"message": "401"},
+            status=401,
         )
         resp = client.get("/api/users")
         assert resp.status_code == 200
@@ -443,6 +553,7 @@ class TestSystemEndpoints:
     def test_health_degraded_without_config(self, client, tmp_db):
         # tmp_db 仍设了 DB_PATH；但删掉 GITLAB_URL/TOKEN 让 config 失败
         import pytest
+
         m = pytest.MonkeyPatch()
         m.delenv("GITLAB_URL", raising=False)
         m.delenv("GITLAB_TOKEN", raising=False)

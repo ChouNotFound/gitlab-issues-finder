@@ -15,7 +15,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 def load_fixture(name: str) -> list[dict]:
     """加载 tests/fixtures/ 下的 JSON 文件。"""
-    with open(FIXTURES_DIR / name, "r", encoding="utf-8") as f:
+    with open(FIXTURES_DIR / name, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -49,6 +49,7 @@ def tmp_db(monkeypatch: pytest.MonkeyPatch) -> str:
     自动初始化 schema。测试结束后自动清理。
     """
     from gitlab_issues_finder import storage
+
     tmp = tempfile.mkdtemp(prefix="gif-test-")
     db_path = os.path.join(tmp, "test.db")
     monkeypatch.setenv("DB_PATH", db_path)

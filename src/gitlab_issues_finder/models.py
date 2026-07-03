@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-
 ItemType = Literal["issue", "merge_request"]
 
 
@@ -34,7 +33,7 @@ class IssueRef:
         return (self.type, self.project_id, self.iid)
 
     @classmethod
-    def from_api(cls, payload: dict, *, type: str = "issue") -> "IssueRef":
+    def from_api(cls, payload: dict, *, type: str = "issue") -> IssueRef:
         """从 GitLab API 返回的 issue / merge_request dict 构造。
 
         GitLab issue 与 merge request API 返回字段结构高度一致，

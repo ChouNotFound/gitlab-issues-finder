@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Union
 
 from dotenv import load_dotenv
 
@@ -16,7 +15,7 @@ from gitlab_issues_finder.errors import ConfigError
 # 加载项目根目录下的 .env（若不存在则静默忽略）
 load_dotenv()
 
-SslVerify = Union[bool, str]
+SslVerify = bool | str
 
 
 def _parse_ssl(raw: str | None) -> SslVerify:
@@ -49,7 +48,7 @@ class AppConfig:
     db_path: str = field(default="data/app.db")
 
     @classmethod
-    def from_env(cls) -> "AppConfig":
+    def from_env(cls) -> AppConfig:
         url = os.environ.get("GITLAB_URL", "").rstrip("/")
         token = os.environ.get("GITLAB_TOKEN", "")
 
@@ -59,8 +58,7 @@ class AppConfig:
             )
         if not token:
             raise ConfigError(
-                "GITLAB_TOKEN 未设置。请在 .env 文件或环境变量中配置。"
-                "Token 需要 read_api scope。"
+                "GITLAB_TOKEN 未设置。请在 .env 文件或环境变量中配置。Token 需要 read_api scope。"
             )
 
         try:

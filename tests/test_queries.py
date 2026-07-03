@@ -15,10 +15,10 @@ from gitlab_issues_finder.queries import (
     ItemKind,
     Relation,
     dedupe,
-    fetch_items,
     fetch_issues_by_assignee,
     fetch_issues_by_author,
     fetch_issues_by_mention,
+    fetch_items,
     fetch_labeled,
     fetch_merge_requests_by_assignee,
     fetch_merge_requests_by_author,
@@ -99,11 +99,14 @@ class TestIssueDimensionQueries:
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "author_username", "alice")
 
-    @pytest.mark.parametrize("func_name,param", [
-        ("fetch_issues_by_assignee", "assignee_username"),
-        ("fetch_issues_by_mention", "mention_username"),
-        ("fetch_issues_by_author", "author_username"),
-    ])
+    @pytest.mark.parametrize(
+        "func_name,param",
+        [
+            ("fetch_issues_by_assignee", "assignee_username"),
+            ("fetch_issues_by_mention", "mention_username"),
+            ("fetch_issues_by_author", "author_username"),
+        ],
+    )
     @responses.activate
     def test_issue_endpoint_passes_with_membership_false(self, gl, func_name, param):
         """关键回归：所有 issue 维度查询都必须传 with_membership=false。
@@ -112,6 +115,7 @@ class TestIssueDimensionQueries:
         导致"项目里明明给我派了活但查不到"的 bug。
         """
         from gitlab_issues_finder import queries as q
+
         func = getattr(q, func_name)
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/issues", [[]])
@@ -187,12 +191,31 @@ class TestFetchMergeRequestsByLabels:
 class TestDedupe:
     def test_no_overlap(self):
         from gitlab_issues_finder.models import IssueRef
-        a = IssueRef.from_api({"project_id": 1, "iid": 1, "title": "a",
-                                "state": "opened", "labels": [], "assignee": None,
-                                "web_url": "u", "updated_at": "t"})
-        b = IssueRef.from_api({"project_id": 2, "iid": 1, "title": "b",
-                                "state": "opened", "labels": [], "assignee": None,
-                                "web_url": "u", "updated_at": "t"})
+
+        a = IssueRef.from_api(
+            {
+                "project_id": 1,
+                "iid": 1,
+                "title": "a",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "u",
+                "updated_at": "t",
+            }
+        )
+        b = IssueRef.from_api(
+            {
+                "project_id": 2,
+                "iid": 1,
+                "title": "b",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "u",
+                "updated_at": "t",
+            }
+        )
         result = dedupe([a], [b])
         assert len(result) == 2
         assert result[0].key == ("issue", 1, 1)
@@ -200,43 +223,105 @@ class TestDedupe:
 
     def test_full_overlap(self):
         from gitlab_issues_finder.models import IssueRef
-        a = IssueRef.from_api({"project_id": 1, "iid": 1, "title": "a",
-                                "state": "opened", "labels": [], "assignee": None,
-                                "web_url": "u", "updated_at": "t"})
-        b = IssueRef.from_api({"project_id": 1, "iid": 1, "title": "a-dup",
-                                "state": "opened", "labels": [], "assignee": None,
-                                "web_url": "u", "updated_at": "t2"})
+
+        a = IssueRef.from_api(
+            {
+                "project_id": 1,
+                "iid": 1,
+                "title": "a",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "u",
+                "updated_at": "t",
+            }
+        )
+        b = IssueRef.from_api(
+            {
+                "project_id": 1,
+                "iid": 1,
+                "title": "a-dup",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "u",
+                "updated_at": "t2",
+            }
+        )
         result = dedupe([a], [b])
         assert len(result) == 1
         assert result[0].title == "a"
 
     def test_partial_overlap(self):
         from gitlab_issues_finder.models import IssueRef
-        a = IssueRef.from_api({"project_id": 1, "iid": 1, "title": "1",
-                                "state": "opened", "labels": [], "assignee": None,
-                                "web_url": "u", "updated_at": "t"})
-        b = IssueRef.from_api({"project_id": 1, "iid": 2, "title": "2",
-                                "state": "opened", "labels": [], "assignee": None,
-                                "web_url": "u", "updated_at": "t"})
-        c = IssueRef.from_api({"project_id": 1, "iid": 1, "title": "1-dup",
-                                "state": "opened", "labels": [], "assignee": None,
-                                "web_url": "u", "updated_at": "t"})
+
+        a = IssueRef.from_api(
+            {
+                "project_id": 1,
+                "iid": 1,
+                "title": "1",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "u",
+                "updated_at": "t",
+            }
+        )
+        b = IssueRef.from_api(
+            {
+                "project_id": 1,
+                "iid": 2,
+                "title": "2",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "u",
+                "updated_at": "t",
+            }
+        )
+        c = IssueRef.from_api(
+            {
+                "project_id": 1,
+                "iid": 1,
+                "title": "1-dup",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "u",
+                "updated_at": "t",
+            }
+        )
         result = dedupe([a], [b, c])
         assert len(result) == 2
         assert [it.iid for it in result] == [1, 2]
 
     def test_cross_type_same_iid_not_deduplicated(self):
         from gitlab_issues_finder.models import IssueRef
+
         issue = IssueRef.from_api(
-            {"project_id": 1, "iid": 5, "title": "issue-5",
-             "state": "opened", "labels": [], "assignee": None,
-             "web_url": "https://gl/issues/5", "updated_at": "t"},
+            {
+                "project_id": 1,
+                "iid": 5,
+                "title": "issue-5",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gl/issues/5",
+                "updated_at": "t",
+            },
             type="issue",
         )
         mr = IssueRef.from_api(
-            {"project_id": 1, "iid": 5, "title": "mr-5",
-             "state": "opened", "labels": [], "assignee": None,
-             "web_url": "https://gl/merge_requests/5", "updated_at": "t"},
+            {
+                "project_id": 1,
+                "iid": 5,
+                "title": "mr-5",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gl/merge_requests/5",
+                "updated_at": "t",
+            },
             type="merge_request",
         )
         result = dedupe([issue], [mr])
@@ -245,16 +330,31 @@ class TestDedupe:
 
     def test_same_type_overlap_still_dedupes(self):
         from gitlab_issues_finder.models import IssueRef
+
         a = IssueRef.from_api(
-            {"project_id": 7, "iid": 1, "title": "a",
-             "state": "opened", "labels": [], "assignee": None,
-             "web_url": "u", "updated_at": "t"},
+            {
+                "project_id": 7,
+                "iid": 1,
+                "title": "a",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "u",
+                "updated_at": "t",
+            },
             type="merge_request",
         )
         b = IssueRef.from_api(
-            {"project_id": 7, "iid": 1, "title": "b",
-             "state": "opened", "labels": [], "assignee": None,
-             "web_url": "u", "updated_at": "t"},
+            {
+                "project_id": 7,
+                "iid": 1,
+                "title": "b",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "u",
+                "updated_at": "t",
+            },
             type="merge_request",
         )
         assert len(dedupe([a], [b])) == 1
@@ -297,7 +397,11 @@ class TestFetchUsers:
 
         result = fetch_users(gl, page_size=100, max_total=150)
         assert len(result) == 150
-        users_calls = [c for c in responses.calls if "/users?" in c.request.url or c.request.url.endswith("/users")]
+        users_calls = [
+            c
+            for c in responses.calls
+            if "/users?" in c.request.url or c.request.url.endswith("/users")
+        ]
         assert len(users_calls) == 2
 
     @responses.activate
@@ -311,11 +415,14 @@ class TestFetchItemsFactory:
     """验证新的 fetch_items() 工厂：参数路由、错误边界。"""
 
     @responses.activate
-    @pytest.mark.parametrize("relation,param", [
-        (Relation.ASSIGNEE, "assignee_username"),
-        (Relation.MENTION, "mention_username"),
-        (Relation.AUTHOR, "author_username"),
-    ])
+    @pytest.mark.parametrize(
+        "relation,param",
+        [
+            (Relation.ASSIGNEE, "assignee_username"),
+            (Relation.MENTION, "mention_username"),
+            (Relation.AUTHOR, "author_username"),
+        ],
+    )
     def test_fetch_items_issue_all_relations(self, gl, relation, param):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_assigned.json")])
@@ -324,12 +431,15 @@ class TestFetchItemsFactory:
         _assert_query_param(responses.calls[-1].request.url, param, "alice")
 
     @responses.activate
-    @pytest.mark.parametrize("relation,param", [
-        (Relation.ASSIGNEE, "assignee_username"),
-        (Relation.MENTION, "mention_username"),
-        (Relation.AUTHOR, "author_username"),
-        (Relation.REVIEWER, "reviewer_username"),
-    ])
+    @pytest.mark.parametrize(
+        "relation,param",
+        [
+            (Relation.ASSIGNEE, "assignee_username"),
+            (Relation.MENTION, "mention_username"),
+            (Relation.AUTHOR, "author_username"),
+            (Relation.REVIEWER, "reviewer_username"),
+        ],
+    )
     def test_fetch_items_mr_all_relations(self, gl, relation, param):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/merge_requests", [load_fixture("mr_mentioned.json")])

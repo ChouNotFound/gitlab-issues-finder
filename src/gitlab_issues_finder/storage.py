@@ -7,10 +7,9 @@ DB_PATH 指定，默认 ``./data/app.db``。
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
-
 
 # ----- Schema -----
 SCHEMA = """
@@ -129,7 +128,12 @@ def list_columns(db_path: str | Path, username: str) -> list[dict]:
             (username,),
         ).fetchall()
     return [
-        {"id": r["column_id"], "title": r["title"], "sort_index": r["sort_index"], "is_builtin": bool(r["is_builtin"])}
+        {
+            "id": r["column_id"],
+            "title": r["title"],
+            "sort_index": r["sort_index"],
+            "is_builtin": bool(r["is_builtin"]),
+        }
         for r in rows
     ]
 
@@ -170,7 +174,9 @@ def delete_column(db_path: str | Path, username: str, column_id: str) -> bool:
         ).fetchone()
         if not row or row["is_builtin"]:
             return False
-        conn.execute("DELETE FROM board_columns WHERE username = ? AND column_id = ?", (username, column_id))
+        conn.execute(
+            "DELETE FROM board_columns WHERE username = ? AND column_id = ?", (username, column_id)
+        )
         conn.execute(
             "DELETE FROM board_overrides WHERE username = ? AND column_id = ?",
             (username, column_id),

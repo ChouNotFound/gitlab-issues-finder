@@ -34,13 +34,33 @@ class JsonFormatter(logging.Formatter):
     平铺到顶层，便于 grep / jq 查询。"""
 
     # LogRecord 标准属性，其它字段视为 extra
-    _RESERVED = frozenset({
-        "args", "asctime", "created", "exc_info", "exc_text", "filename",
-        "funcName", "levelname", "levelno", "lineno", "message", "module",
-        "msecs", "msg", "name", "pathname", "process", "processName",
-        "relativeCreated", "stack_info", "thread", "threadName",
-        "taskName",
-    })
+    _RESERVED = frozenset(
+        {
+            "args",
+            "asctime",
+            "created",
+            "exc_info",
+            "exc_text",
+            "filename",
+            "funcName",
+            "levelname",
+            "levelno",
+            "lineno",
+            "message",
+            "module",
+            "msecs",
+            "msg",
+            "name",
+            "pathname",
+            "process",
+            "processName",
+            "relativeCreated",
+            "stack_info",
+            "thread",
+            "threadName",
+            "taskName",
+        }
+    )
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {

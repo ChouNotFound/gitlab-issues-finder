@@ -17,8 +17,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator, Sequence
 from enum import Enum
-from typing import Iterable, Iterator, Sequence
 
 import gitlab
 
@@ -213,6 +213,8 @@ def fetch_merge_requests_by_reviewer(gl, username, page_size=100):
 
 
 def fetch_merge_requests_by_labels(
-    gl, labels, page_size=100,
+    gl,
+    labels,
+    page_size=100,
 ):
     return fetch_labeled(gl, labels, kind=ItemKind.MERGE_REQUEST, page_size=page_size)
