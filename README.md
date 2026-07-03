@@ -47,6 +47,13 @@ GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx   # scope: read_api
 python -m gitlab_issues_finder --version   # 输出版本号后退出
 ```
 
+或者安装后用 `gif` 命令（pip install -e . 之后）：
+
+```bash
+gif --version
+gif                      # 启动 uvicorn 服务
+```
+
 ### 3. 启动（可选参数 --version）
 
 ```bash

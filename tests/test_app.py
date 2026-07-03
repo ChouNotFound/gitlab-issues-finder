@@ -1410,3 +1410,15 @@ class TestMainCLI:
         main()
         captured = capsys.readouterr()
         assert "gitlab-issues-finder" in captured.out
+
+
+class TestGifScriptEntryPoint:
+    def test_gif_entry_point_defined(self):
+        """pyproject.toml 的 [project.scripts] 必须包含 gif = ... main。"""
+        import tomllib
+
+        with open("pyproject.toml", "rb") as f:
+            data = tomllib.load(f)
+        scripts = data.get("project", {}).get("scripts", {})
+        assert "gif" in scripts, f"gif entry point missing; got {list(scripts.keys())}"
+        assert scripts["gif"] == "gitlab_issues_finder.__main__:main"
