@@ -174,6 +174,23 @@ pytest -v
 - `test_app.py`：FastAPI 端到端、错误页渲染、看板 5 列分桶、列管理 API、主题切换
 - `test_storage.py`：看板拖拽、列 CRUD、主题、最近用户
 
+## 🐳 Docker 部署
+
+项目根目录已带 `Dockerfile`（多阶段构建：builder + 3.12-slim runtime）
+与 `docker-compose.yml`。
+
+`ash
+cp .env.docker.example .env       # 填入 GITLAB_URL / GITLAB_TOKEN
+docker compose up -d --build
+`
+
+数据持久化：SQLite 落盘在 `app-data` volume（默认 `/app/data/app.db`），
+重启 / 升级容器不丢看板状态。
+
+健康检查：`HEALTHCHECK` 每 30s 探一次 `/api/health`。
+
+镜像以非 root 用户（`app`）运行，仅暴露 `8000` 端口。
+
 ## 🐛 常见问题
 
 **Q: 启动报 `GITLAB_TOKEN` / `GITLAB_URL` 未设置**

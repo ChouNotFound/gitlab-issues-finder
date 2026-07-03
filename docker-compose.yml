@@ -1,0 +1,25 @@
+services:
+  app:
+    build: .
+    image: gitlab-issues-finder:local
+    container_name: gitlab-issues-finder
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # 必须：替换成真实值（推荐用 .env 文件 + env_file:）
+      GITLAB_URL: ${GITLAB_URL:?GITLAB_URL is required}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:?GITLAB_TOKEN is required}
+      GITLAB_SSL_VERIFY: ${GITLAB_SSL_VERIFY:-true}
+      GITLAB_TIMEOUT: ${GITLAB_TIMEOUT:-30}
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: 8000
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_JSON: ${LOG_JSON:-0}
+    env_file:
+      - .env
+    volumes:
+      - app-data:/app/data
+
+volumes:
+  app-data:
