@@ -751,3 +751,30 @@ class TestProjectNameDisplay:
         assert r.status_code == 200
         assert "team/cool" in r.text
         assert "p42" in r.text
+
+
+class TestOpenAPITags:
+    """验证 OpenAPI 文档带 tag 分组。"""
+
+    def test_openapi_has_tag_groups(self, client, tmp_db):
+        r = client.get("/openapi.json")
+        assert r.status_code == 200
+        spec = r.json()
+        tags = {t["name"] for t in spec.get("tags", [])}
+        assert {"UI", "Board", "Users", "Export", "System"} <= tags
+
+    def test_routes_carry_their_tag(self, client, tmp_db):
+        r = client.get("/openapi.json")
+        spec = r.json()
+        paths = spec["paths"]
+        assert "Users" in paths["/api/users"]["get"]["tags"]
+        assert "System" in paths["/api/health"]["get"]["tags"]
+        assert "Export" in paths["/api/export.csv"]["get"]["tags"]
+        assert "Board" in paths["/api/board/move"]["post"]["tags"]
+
+    def test_app_metadata_present(self, client, tmp_db):
+        r = client.get("/openapi.json")
+        spec = r.json()
+        info = spec["info"]
+        assert "GitLab Status Board" in info["title"]
+        assert info["description"]

@@ -72,7 +72,21 @@ async def _lifespan(_app: FastAPI):
     logger.info("shutdown")
 
 
-app = FastAPI(title="GitLab Status Board", lifespan=_lifespan)
+app = FastAPI(
+    title="GitLab Status Board",
+    description="Personal tool for a self-hosted GitLab: pull all issues and merge requests related to a username across the assignee / mention / author / reviewer dimensions, render as a Kanban board, export to CSV / Markdown.",
+    lifespan=_lifespan,
+    openapi_tags=[
+        {"name": "UI", "description": "Server-rendered HTML pages."},
+        {
+            "name": "Board",
+            "description": "Kanban board state management (drag overrides, columns).",
+        },
+        {"name": "Users", "description": "User listing and per-user preferences."},
+        {"name": "Export", "description": "One-shot data export in CSV / Markdown."},
+        {"name": "System", "description": "Version, health, and diagnostics."},
+    ],
+)
 app.add_middleware(RequestIDMiddleware)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
@@ -100,7 +114,7 @@ def _validate_username(raw: str) -> str | None:
 
 
 # ----- HTML 路由 -----
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, tags=["UI"])
 async def index(request: Request) -> HTMLResponse:
     """首页：选择用户名（带 datalist 自动补全 + 最近使用）。"""
     cfg = _try_cfg()
@@ -117,7 +131,7 @@ async def index(request: Request) -> HTMLResponse:
     )
 
 
-@app.post("/search", response_class=HTMLResponse)
+@app.post("/search", response_class=HTMLResponse, tags=["UI"])
 async def search(
     request: Request,
     username: str = Form(...),
@@ -223,7 +237,7 @@ async def search(
     )
 
 
-@app.get("/board", response_class=HTMLResponse)
+@app.get("/board", response_class=HTMLResponse, tags=["UI"])
 async def board(
     request: Request,
     username: str = Query("", alias="username"),
@@ -452,7 +466,7 @@ def _compute_summary(
 
 
 # ----- JSON API -----
-@app.get("/api/users")
+@app.get("/api/users", tags=["Users"])
 async def api_users() -> JSONResponse:
     """返回活跃用户列表（精简字段），供首页 datalist 自动补全使用。失败时静默返回空。"""
     try:
@@ -469,7 +483,7 @@ async def api_users() -> JSONResponse:
     return JSONResponse({"users": items})
 
 
-@app.get("/api/recent-users")
+@app.get("/api/recent-users", tags=["Users"])
 async def api_recent_users() -> JSONResponse:
     try:
         dbp = _db_path()
@@ -479,7 +493,7 @@ async def api_recent_users() -> JSONResponse:
     return JSONResponse({"users": users})
 
 
-@app.post("/api/board/move")
+@app.post("/api/board/move", tags=["Board"])
 async def api_board_move(payload: dict = Body(...)) -> JSONResponse:
     """拖拽覆盖：{username, item_key, column_id}。"""
     username = _validate_username(payload.get("username", ""))
@@ -495,7 +509,7 @@ async def api_board_move(payload: dict = Body(...)) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
-@app.post("/api/board/reset")
+@app.post("/api/board/reset", tags=["Board"])
 async def api_board_reset(payload: dict = Body(...)) -> JSONResponse:
     username = _validate_username(payload.get("username", ""))
     if not username:
@@ -504,7 +518,7 @@ async def api_board_reset(payload: dict = Body(...)) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
-@app.post("/api/board/columns")
+@app.post("/api/board/columns", tags=["Board"])
 async def api_board_columns_add(payload: dict = Body(...)) -> JSONResponse:
     username = _validate_username(payload.get("username", ""))
     title = str(payload.get("title", "")).strip()
@@ -523,7 +537,7 @@ async def api_board_columns_add(payload: dict = Body(...)) -> JSONResponse:
     return JSONResponse({"column": column})
 
 
-@app.patch("/api/board/columns/{column_id}")
+@app.patch("/api/board/columns/{column_id}", tags=["Board"])
 async def api_board_columns_rename(
     column_id: str,
     payload: dict = Body(...),
@@ -539,7 +553,7 @@ async def api_board_columns_rename(
     return JSONResponse({"ok": True})
 
 
-@app.delete("/api/board/columns/{column_id}")
+@app.delete("/api/board/columns/{column_id}", tags=["Board"])
 async def api_board_columns_delete(
     column_id: str,
     payload: dict = Body(...),
@@ -554,7 +568,7 @@ async def api_board_columns_delete(
     return JSONResponse({"ok": True})
 
 
-@app.post("/api/preferences")
+@app.post("/api/preferences", tags=["Users"])
 async def api_preferences(payload: dict = Body(...)) -> JSONResponse:
     username = _validate_username(payload.get("username", ""))
     theme = str(payload.get("theme", "auto"))
@@ -568,7 +582,7 @@ async def api_preferences(payload: dict = Body(...)) -> JSONResponse:
 
 
 # ----- 系统端点 -----
-@app.get("/api/version")
+@app.get("/api/version", tags=["System"])
 async def api_version() -> JSONResponse:
     """返回应用版本与 Python / 关键依赖版本。便于部署后做版本核对。"""
     import sys
@@ -584,7 +598,7 @@ async def api_version() -> JSONResponse:
     )
 
 
-@app.get("/api/health")
+@app.get("/api/health", tags=["System"])
 async def api_health() -> JSONResponse:
     """健康检查：检查 SQLite 可达 + GitLab config 是否配齐。
 
@@ -639,7 +653,7 @@ def _collect_export_items(username: str, labels_raw: str) -> list[IssueRef]:
     return dedupe(*issue_lists.values(), *mr_lists.values(), issues_labeled, mrs_labeled)
 
 
-@app.get("/api/export.csv")
+@app.get("/api/export.csv", tags=["Export"])
 async def api_export_csv(username: str = Query(...), labels: str = Query("")) -> Response:
     """以 CSV 格式导出与 username 相关的所有 item。
 
@@ -671,7 +685,7 @@ async def api_export_csv(username: str = Query(...), labels: str = Query("")) ->
     )
 
 
-@app.get("/api/export.md")
+@app.get("/api/export.md", tags=["Export"])
 async def api_export_md(username: str = Query(...), labels: str = Query("")) -> Response:
     """以 Markdown 表格格式导出。便于贴进周报 / PR description。"""
     items = _collect_export_items(username, labels)
