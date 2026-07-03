@@ -27,17 +27,16 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, Form, HTTPException, Query, Request
-from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from gitlab_issues_finder import storage
 from gitlab_issues_finder.client import build_client
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.logging_setup import get_logger
-from gitlab_issues_finder.rate_limit import get_default_limiter
 from gitlab_issues_finder.middleware import RequestIDMiddleware
 from gitlab_issues_finder.models import IssueRef
 from gitlab_issues_finder.project_resolver import resolve as resolve_projects
@@ -49,6 +48,7 @@ from gitlab_issues_finder.queries import (
     fetch_labeled,
     fetch_users,
 )
+from gitlab_issues_finder.rate_limit import get_default_limiter
 
 logger = get_logger(__name__)
 
@@ -100,7 +100,11 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         # Use X-Forwarded-For first hop if present, else client.host
         xff = request.headers.get("x-forwarded-for")
-        ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else "anon")
+        ip = (
+            xff.split(",")[0].strip()
+            if xff
+            else (request.client.host if request.client else "anon")
+        )
         if not limiter.hit(ip):
             retry_after = max(1, int(60 / max(limiter.per_minute, 1)))
             return JSONResponse(
@@ -109,6 +113,7 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": str(retry_after)},
             )
         return await call_next(request)
+
 
 app.add_middleware(_RateLimitMiddleware)
 app.add_middleware(RequestIDMiddleware)

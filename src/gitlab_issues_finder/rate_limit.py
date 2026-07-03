@@ -24,7 +24,7 @@ class RateLimiter:
         self.per_minute = per_minute
         self.burst = burst if burst is not None else per_minute
         self._rate = per_minute / 60.0
-        self._buckets: dict[str, "_Bucket"] = {}
+        self._buckets: dict[str, _Bucket] = {}
         self._lock = threading.Lock()
 
     def hit(self, key: str) -> bool:
