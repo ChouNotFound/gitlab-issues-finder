@@ -1,0 +1,22 @@
+[
+  {
+    "project_id": 101,
+    "iid": 5,
+    "title": "Add CI pipeline for backend",
+    "state": "opened",
+    "labels": ["devops", "alice"],
+    "assignee": {"username": "bob"},
+    "web_url": "https://gitlab.example.com/group/proj1/-/merge_requests/5",
+    "updated_at": "2026-07-01T11:00:00.000Z"
+  },
+  {
+    "project_id": 102,
+    "iid": 9,
+    "title": "Refactor auth module",
+    "state": "opened",
+    "labels": ["backend"],
+    "assignee": {"username": "carol"},
+    "web_url": "https://gitlab.example.com/group/proj2/-/merge_requests/9",
+    "updated_at": "2026-07-02T09:45:00.000Z"
+  }
+]

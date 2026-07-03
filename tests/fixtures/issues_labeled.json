@@ -1,0 +1,22 @@
+[
+  {
+    "project_id": 101,
+    "iid": 1,
+    "title": "Fix login bug",
+    "state": "opened",
+    "labels": ["bug", "alice"],
+    "assignee": {"username": "alice"},
+    "web_url": "https://gitlab.example.com/group/proj1/-/issues/1",
+    "updated_at": "2026-07-01T10:30:00.000Z"
+  },
+  {
+    "project_id": 103,
+    "iid": 7,
+    "title": "Review architecture doc",
+    "state": "opened",
+    "labels": ["alice", "doc"],
+    "assignee": {"username": "bob"},
+    "web_url": "https://gitlab.example.com/group/proj3/-/issues/7",
+    "updated_at": "2026-06-30T14:20:00.000Z"
+  }
+]

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="user-theme" content="auto">
+    <title>{{ title }} · GitLab Status Board</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="shell">
+    {% if active_tab is not none %}
+    {% include "_nav.html" %}
+    {% else %}
+    <header class="topbar">
+        <div class="brand"><span class="brand-mark">G</span><span>Status Board</span></div>
+        <div class="topbar-spacer"></div>
+        <button type="button" class="theme-toggle" id="theme-toggle" aria-label="切换主题">
+            <span aria-hidden="true">◐</span>
+        </button>
+    </header>
+    <script>
+        (function () {
+            const KEY = 'theme';
+            const root = document.documentElement;
+            try {
+                const cur = localStorage.getItem(KEY) || 'auto';
+                if (cur !== 'auto') root.setAttribute('data-theme', cur);
+            } catch (e) {}
+            const btn = document.getElementById('theme-toggle');
+            if (btn) btn.addEventListener('click', () => {
+                let cur = 'auto';
+                try { cur = localStorage.getItem(KEY) || 'auto'; } catch (e) {}
+                const next = cur === 'auto' ? 'light' : cur === 'light' ? 'dark' : 'auto';
+                if (next === 'auto') root.removeAttribute('data-theme');
+                else root.setAttribute('data-theme', next);
+                try { localStorage.setItem(KEY, next); } catch (e) {}
+            });
+        })();
+    </script>
+    {% endif %}
+    <main class="shell-main">
+        <div class="error-card">
+            <h1 class="error-title">⚠ {{ title }}</h1>
+            <div class="error-body">{{ message }}</div>
+            <div style="margin-top: 16px;">
+                <a href="/" class="btn">← 回到首页</a>
+            </div>
+        </div>
+    </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,22 @@
+[
+  {
+    "project_id": 101,
+    "iid": 1,
+    "title": "Fix login bug",
+    "state": "opened",
+    "labels": ["bug", "alice"],
+    "assignee": {"username": "alice"},
+    "web_url": "https://gitlab.example.com/group/proj1/-/issues/1",
+    "updated_at": "2026-07-01T10:30:00.000Z"
+  },
+  {
+    "project_id": 102,
+    "iid": 42,
+    "title": "Add new feature X",
+    "state": "opened",
+    "labels": ["feature"],
+    "assignee": {"username": "alice"},
+    "web_url": "https://gitlab.example.com/group/proj2/-/issues/42",
+    "updated_at": "2026-07-02T08:15:00.000Z"
+  }
+]

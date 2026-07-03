@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="user-theme" content="{{ theme }}">
+    <meta name="username" content="{{ username }}">
+    <title>控制台 — {{ username or '请选择用户' }} · GitLab Status Board</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="shell">
+    {% include "_nav.html" %}
+    <main class="shell-main">
+
+        {% if not username %}
+        <div class="home-wrap">
+            <div class="card home-card">
+                <h1 class="home-title">打开控制台</h1>
+                <p class="home-subtitle">输入你的 GitLab 用户名，进入个人工作台。</p>
+                <form class="home-form" method="get" action="/board">
+                    <label class="field-label" for="username">GitLab 用户名</label>
+                    <input type="text" id="username" name="username"
+                           placeholder="例如：alice" required autofocus
+                           list="recent-users" autocomplete="off" spellcheck="false">
+                    <datalist id="recent-users"></datalist>
+                    <button type="submit" class="btn btn-primary">进入控制台</button>
+                </form>
+                <p class="home-tip">控制台视图是<strong>只读</strong>的，拖拽仅本地保存（SQLite）。</p>
+            </div>
+        </div>
+        <script>
+            (async function () {
+                try {
+                    const r = await fetch('/api/recent-users');
+                    const data = await r.json();
+                    const dl = document.getElementById('recent-users');
+                    const frag = document.createDocumentFragment();
+                    for (const u of data.users || []) {
+                        const opt = document.createElement('option');
+                        opt.value = u;
+                        frag.appendChild(opt);
+                    }
+                    dl.appendChild(frag);
+                } catch (e) { /* silent */ }
+            })();
+        </script>
+        {% else %}
+
+        <div class="console-layout">
+            <aside class="console-sidebar" aria-label="视图导航">
+                <div class="sidebar-header">
+                    <h2 class="sidebar-title">控制台</h2>
+                    <p class="sidebar-username">@{{ username }}</p>
+                </div>
+                <nav class="sidebar-nav">
+                    {% set view_query = '&q=' + filter_q if filter_q else '' %}
+                    <a href="/board?username={{ username }}&view=summary{{ view_query }}"
+                       class="sidebar-link {% if view == 'summary' %}active{% endif %}">
+                        <span class="sidebar-link-icon">🏠</span>
+                        <span class="sidebar-link-label">综述</span>
+                        <span class="sidebar-link-count">{{ summary.total }}</span>
+                    </a>
+                    <a href="/board?username={{ username }}&view=all{{ view_query }}"
+                       class="sidebar-link {% if view == 'all' %}active{% endif %}">
+                        <span class="sidebar-link-icon">📋</span>
+                        <span class="sidebar-link-label">全部 Items</span>
+                        <span class="sidebar-link-count">{{ summary.total }}</span>
+                    </a>
+                    <a href="/board?username={{ username }}&view=issues{{ view_query }}"
+                       class="sidebar-link {% if view == 'issues' %}active{% endif %}">
+                        <span class="sidebar-link-icon">🐛</span>
+                        <span class="sidebar-link-label">Issues</span>
+                        <span class="sidebar-link-count">{{ summary.issues }}</span>
+                    </a>
+                    <a href="/board?username={{ username }}&view=mrs{{ view_query }}"
+                       class="sidebar-link {% if view == 'mrs' %}active{% endif %}">
+                        <span class="sidebar-link-icon">🔀</span>
+                        <span class="sidebar-link-label">Merge Requests</span>
+                        <span class="sidebar-link-count">{{ summary.mrs }}</span>
+                    </a>
+                    <div class="sidebar-divider"></div>
+                    <div class="sidebar-section-label">按维度</div>
+                    <a href="/board?username={{ username }}&view=relation{{ view_query }}"
+                       class="sidebar-link {% if view == 'relation' %}active{% endif %}">
+                        <span class="sidebar-link-icon">🧭</span>
+                        <span class="sidebar-link-label">按"与我关系"</span>
+                    </a>
+                    <a href="/board?username={{ username }}&view=project{{ view_query }}"
+                       class="sidebar-link {% if view == 'project' %}active{% endif %}">
+                        <span class="sidebar-link-icon">📁</span>
+                        <span class="sidebar-link-label">按项目</span>
+                        <span class="sidebar-link-count">{{ summary.projects }}</span>
+                    </a>
+                </nav>
+
+                <div class="sidebar-footer">
+                    <form method="get" action="/board" class="sidebar-filter">
+                        <input type="hidden" name="username" value="{{ username }}">
+                        <input type="hidden" name="view" value="{{ view }}">
+                        <label class="field-label">标签过滤</label>
+                        <input type="text" name="q" value="{{ filter_q }}"
+                               placeholder="如 bug,priority::high"
+                               list="recent-q">
+                        <datalist id="recent-q"></datalist>
+                        <button type="submit" class="btn btn-sm">应用</button>
+                    </form>
+                    <div class="sidebar-actions">
+                        <a href="/search?username={{ username }}" class="btn btn-sm btn-ghost">查询视图</a>
+                        <a href="/" class="btn btn-sm btn-ghost">切换用户</a>
+                    </div>
+                </div>
+            </aside>
+
+            <section class="console-main">
+
+                <header class="console-header">
+                    <h1 class="console-title">
+                        {% if view == 'summary' %}综述
+                        {% elif view == 'all' %}全部 Items
+                        {% elif view == 'issues' %}Issues
+                        {% elif view == 'mrs' %}Merge Requests
+                        {% elif view == 'relation' %}按"与我关系"
+                        {% elif view == 'project' %}按项目
+                        {% endif %}
+                        <span class="console-subtitle">
+                            @{{ username }}
+                            {% if filter_q %}· 标签 {{ filter_q }}{% endif %}
+                        </span>
+                    </h1>
+                </header>
+
+                {# ====== Summary 视图 ====== #}
+                {% if view == 'summary' %}
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-label">总 Items</div>
+                        <div class="kpi-value">{{ summary.total }}</div>
+                        <div class="kpi-sub">{{ summary.issues }} Issue · {{ summary.mrs }} MR</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">涉及项目</div>
+                        <div class="kpi-value">{{ summary.projects }}</div>
+                        <div class="kpi-sub">跨实例统计</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">最近更新</div>
+                        <div class="kpi-value-sm">
+                            {% if summary.most_recent %}
+                                <a href="{{ summary.most_recent.web_url }}" target="_blank" rel="noopener">
+                                    #{{ summary.most_recent.iid }}
+                                </a>
+                            {% else %}—{% endif %}
+                        </div>
+                        <div class="kpi-sub">
+                            {% if summary.most_recent %}
+                                {{ summary.most_recent.updated_at[:10] }}
+                            {% else %}暂无数据{% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="console-panels">
+                    <section class="console-panel">
+                        <h3 class="panel-title">按"与我关系"分布</h3>
+                        <div class="relation-bars">
+                            {% set rels = [('reviewer', '需我审查', summary.by_relation.reviewer),
+                                           ('assignee', '需我动', summary.by_relation.assignee),
+                                           ('mention', '@我的', summary.by_relation.mention),
+                                           ('author', '我创建的', summary.by_relation.author),
+                                           ('other', '其他参与', summary.by_relation.other)] %}
+                            {% for rel_id, rel_label, rel_count in rels %}
+                            <a class="relation-bar-row"
+                               href="/board?username={{ username }}&view=relation{{ view_query }}">
+                                <span class="relation-bar-tag reason-{{ rel_id }}">{{ rel_id }}</span>
+                                <span class="relation-bar-label">{{ rel_label }}</span>
+                                <span class="relation-bar-bar">
+                                    <span class="relation-bar-fill"
+                                          style="width: {% if summary.total > 0 %}{{ (rel_count * 100 / summary.total)|round(1) }}{% else %}0{% endif %}%"></span>
+                                </span>
+                                <span class="relation-bar-count">{{ rel_count }}</span>
+                            </a>
+                            {% endfor %}
+                        </div>
+                    </section>
+
+                    <section class="console-panel">
+                        <h3 class="panel-title">活跃项目 TOP {{ summary.by_project|length }}</h3>
+                        {% if summary.by_project %}
+                        <div class="proj-list">
+                            {% for p in summary.by_project %}
+                            <a class="proj-row"
+                               href="/board?username={{ username }}&view=project&proj={{ p.project_id }}{{ view_query }}">
+                                <span class="proj-id">P{{ p.project_id }}</span>
+                                <span class="proj-bar">
+                                    <span class="proj-fill"
+                                          style="width: {% if summary.by_project[0].count > 0 %}{{ (p.count * 100 / summary.by_project[0].count)|round(1) }}{% else %}0{% endif %}%"></span>
+                                </span>
+                                <span class="proj-count">{{ p.count }}</span>
+                            </a>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <div class="hint" style="padding: 16px;">暂无项目数据</div>
+                        {% endif %}
+                    </section>
+                </div>
+
+                {# 最近条目预览 #}
+                {% if all_items %}
+                <section class="console-panel">
+                    <h3 class="panel-title">最近活动（前 10 条）</h3>
+                    <div class="table-wrapper">
+                        <table class="data-table">
+                            <thead>
+                                <tr><th>IID</th><th>Title</th><th>类型</th><th>更新</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for it in all_items[:10] %}
+                                <tr>
+                                    <td><span class="num">{{ '!' if it.type == 'merge_request' else '#' }}{{ it.iid }}</span><span class="cell-meta">p{{ it.project_id }}</span></td>
+                                    <td class="cell-title"><a href="{{ it.web_url }}" target="_blank" rel="noopener">{{ it.title }}</a></td>
+                                    <td><span class="kanban-card-type is-{{ it.type }}">{{ it.type[:3]|upper }}</span></td>
+                                    <td><span class="num">{{ it.updated_at[:10] }}</span></td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+                {% endif %}
+
+                {# ====== 全部 / Issues / MRs 视图 ====== #}
+                {% elif view in ('all', 'issues', 'mrs') %}
+                {% set items_to_show = [] %}
+                {% if view == 'all' %}{% set _ = items_to_show.extend(all_items) %}
+                                {% elif view == 'issues' %}{% for it in all_items %}{% if it.type == 'issue' %}{% set _ = items_to_show.append(it) %}{% endif %}{% endfor %}
+                                {% elif view == 'mrs' %}{% for it in all_items %}{% if it.type == 'merge_request' %}{% set _ = items_to_show.append(it) %}{% endif %}{% endfor %}
+                                {% endif %}
+                {% if items_to_show %}
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>IID</th><th>Project</th><th>Title</th>
+                                <th>状态</th><th>Labels</th><th>更新</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for it in items_to_show %}
+                            <tr>
+                                <td><span class="num">{{ '!' if it.type == 'merge_request' else '#' }}{{ it.iid }}</span></td>
+                                <td><span class="cell-meta">P{{ it.project_id }}</span></td>
+                                <td class="cell-title"><a href="{{ it.web_url }}" target="_blank" rel="noopener">{{ it.title }}</a></td>
+                                <td><span class="badge-state badge-{{ it.state }}">{{ it.state }}</span></td>
+                                <td>{% for lb in it.labels[:3] %}<span class="tag">{{ lb }}</span>{% endfor %}{% if it.labels|length > 3 %}<span class="tag">+{{ it.labels|length - 3 }}</span>{% endif %}</td>
+                                <td><span class="num">{{ it.updated_at[:10] }}</span></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="card empty-state">
+                    <div class="empty-state-icon">📭</div>
+                    <p>该视图下暂无数据</p>
+                </div>
+                {% endif %}
+
+                {# ====== 按"关系"视图（原 Kanban，保留拖拽） ====== #}
+                {% elif view == 'relation' %}
+                <div class="kanban" id="kanban-board">
+                    {% set rel_labels = {'reviewer': '需我审查', 'assignee': '需我动', 'mention': '@我的', 'author': '我创建的', 'other': '其他参与'} %}
+                    {% for rel_id, rel_label in rel_labels.items() %}
+                    <section class="kanban-col" data-col-id="{{ rel_id }}">
+                        <header class="kanban-col-head">
+                            <span class="kanban-col-count" data-col-count>{{ items_by_rel[rel_id]|length }}</span>
+                            <h3 class="kanban-col-title" style="cursor: default;">{{ rel_label }}</h3>
+                        </header>
+                        <div class="kanban-col-body" data-col-body="{{ rel_id }}">
+                            {% for item in items_by_rel[rel_id] %}
+                            <article class="kanban-card"
+                                     draggable="true"
+                                     data-mr-key="{{ item.type }}-{{ item.project_id }}-{{ item.iid }}"
+                                     data-type="{{ item.type }}">
+                                <div class="kanban-card-title">
+                                    <span class="kanban-card-type is-{{ item.type }}">
+                                        {% if item.type == 'merge_request' %}!{% else %}#{% endif %}{{ item.iid }}
+                                    </span>
+                                    <a class="kanban-card-title-link"
+                                       href="{{ item.web_url }}" target="_blank" rel="noopener"
+                                       title="{{ item.title }}">{{ item.title }}</a>
+                                </div>
+                                <div class="kanban-card-meta">
+                                    <span class="cell-meta">p{{ item.project_id }}</span>
+                                    {% for label in item.labels[:4] %}<span class="tag">{{ label }}</span>{% endfor %}
+                                    <span class="updated">{{ item.updated_at[:10] }}</span>
+                                </div>
+                            </article>
+                            {% endfor %}
+                            {% if not items_by_rel[rel_id] %}
+                            <div class="kanban-empty">暂无</div>
+                            {% endif %}
+                        </div>
+                    </section>
+                    {% endfor %}
+                </div>
+                <p class="hint" style="margin: 16px 24px;">💡 此视图拖拽改列会持久化到本地 SQLite，下次访问同一用户名继续生效。</p>
+
+                {# ====== 按项目视图 ====== #}
+                {% elif view == 'project' %}
+                <div class="proj-panel-list">
+                    {% for pid, plist in items_by_proj.items() %}
+                    <details class="proj-panel" open>
+                        <summary class="proj-panel-head">
+                            <span class="proj-id">P{{ pid }}</span>
+                            <span class="proj-panel-count">{{ plist|length }} 条</span>
+                        </summary>
+                        <div class="table-wrapper" style="margin: 8px 0 16px;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr><th>IID</th><th>Title</th><th>类型</th><th>Labels</th><th>状态</th><th>更新</th></tr>
+                                </thead>
+                                <tbody>
+                                    {% for it in plist %}
+                                    <tr>
+                                        <td><span class="num">{{ '!' if it.type == 'merge_request' else '#' }}{{ it.iid }}</span></td>
+                                        <td class="cell-title"><a href="{{ it.web_url }}" target="_blank" rel="noopener">{{ it.title }}</a></td>
+                                        <td><span class="kanban-card-type is-{{ it.type }}">{{ it.type[:3]|upper }}</span></td>
+                                        <td>{% for lb in it.labels[:3] %}<span class="tag">{{ lb }}</span>{% endfor %}</td>
+                                        <td><span class="badge-state badge-{{ it.state }}">{{ it.state }}</span></td>
+                                        <td><span class="num">{{ it.updated_at[:10] }}</span></td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </details>
+                    {% else %}
+                    <div class="card empty-state"><div class="empty-state-icon">📁</div><p>暂无项目数据</p></div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+            </section>
+        </div>
+
+        {% endif %}
+
+    </main>
+</div>
+
+<div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+{% if username and view == 'relation' %}
+<script>
+    (function () {
+        const USERNAME = {{ username|tojson }};
+        const showToast = (msg, type) => {
+            const t = document.createElement('div');
+            t.className = 'toast' + (type ? ' toast-' + type : '');
+            t.textContent = msg;
+            document.getElementById('toast-container').appendChild(t);
+            setTimeout(() => t.remove(), 3000);
+        };
+
+        let draggedCard = null;
+        document.querySelectorAll('.kanban-card').forEach(card => {
+            card.addEventListener('dragstart', e => {
+                draggedCard = card;
+                e.dataTransfer.setData('text/plain', card.dataset.mrKey);
+                e.dataTransfer.effectAllowed = 'move';
+                requestAnimationFrame(() => card.classList.add('dragging'));
+            });
+            card.addEventListener('dragend', () => {
+                card.classList.remove('dragging');
+                document.querySelectorAll('.kanban-col-body').forEach(b => b.classList.remove('drag-over'));
+                draggedCard = null;
+            });
+        });
+        document.querySelectorAll('.kanban-col-body').forEach(body => {
+            body.addEventListener('dragover', e => {
+                e.preventDefault();
+                body.classList.add('drag-over');
+            });
+            body.addEventListener('dragleave', e => {
+                if (e.target === body) body.classList.remove('drag-over');
+            });
+            body.addEventListener('drop', async e => {
+                e.preventDefault();
+                body.classList.remove('drag-over');
+                if (!draggedCard) return;
+                body.appendChild(draggedCard);
+                updateCounts();
+                try {
+                    const resp = await fetch('/api/board/move', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            username: USERNAME,
+                            item_key: draggedCard.dataset.mrKey,
+                            column_id: body.dataset.colBody,
+                        }),
+                    });
+                    if (!resp.ok) throw new Error('move failed');
+                } catch (err) {
+                    showToast('保存失败：' + err.message, 'error');
+                }
+            });
+        });
+        function updateCounts() {
+            document.querySelectorAll('.kanban-col').forEach(col => {
+                const id = col.dataset.colId;
+                const body = col.querySelector('[data-col-body="' + id + '"]');
+                const count = body.querySelectorAll('.kanban-card').length;
+                col.querySelector('[data-col-count]').textContent = count;
+            });
+        }
+    })();
+</script>
+{% endif %}
+
+</body>
+</html>

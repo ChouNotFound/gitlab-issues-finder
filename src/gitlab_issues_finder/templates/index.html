@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="user-theme" content="auto">
+    <title>GitLab Status Board — 打开我的看板</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="shell">
+    {% include "_nav.html" %}
+    <main class="shell-main">
+        <div class="home-wrap">
+            <div class="card home-card">
+                <h1 class="home-title">打开我的看板</h1>
+                <p class="home-subtitle">
+                    输入你的 GitLab 用户名，按"参与维度"一览所有 issue 与 merge request。
+                </p>
+
+                <div class="home-form">
+                    <div>
+                        <label class="field-label" for="username">GitLab 用户名</label>
+                        <form method="get" action="/board">
+                            <div class="row-with-button">
+                                <input
+                                    type="text"
+                                    id="username"
+                                    name="username"
+                                    placeholder="例如：alice"
+                                    list="gitlab-users"
+                                    required
+                                    autofocus
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                >
+                                <button type="submit" class="btn btn-primary">查看看板 →</button>
+                            </div>
+                        </form>
+                        <datalist id="gitlab-users"></datalist>
+                    </div>
+
+                    {% if recent_users %}
+                    <div>
+                        <label class="field-label">最近</label>
+                        <div class="recent-chips">
+                            {% for u in recent_users %}
+                            <a class="recent-chip" href="/board?username={{ u }}">{{ u }}</a>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <p class="home-tip">
+                    💡 看一次后会自动保存到这里。也可前往
+                    <a href="/search">查询视图</a>
+                    用标签精确过滤。
+                </p>
+            </div>
+
+            <p class="home-tip" style="text-align: center; margin-top: 16px;">
+                看板视图是<strong>只读</strong>的，拖拽卡片仅在本机 / 本用户保存。
+            </p>
+        </div>
+    </main>
+</div>
+
+<script>
+    // 用户自动补全（datalist）；失败时静默降级
+    (async function loadUsers() {
+        const datalist = document.getElementById('gitlab-users');
+        if (!datalist) return;
+        try {
+            const resp = await fetch('/api/users', { headers: { 'Accept': 'application/json' } });
+            if (!resp.ok) return;
+            const data = await resp.json();
+            const users = data.users || [];
+            const frag = document.createDocumentFragment();
+            for (const u of users) {
+                const opt = document.createElement('option');
+                opt.value = u.username;
+                if (u.name && u.name !== u.username) opt.label = `${u.name} (${u.username})`;
+                frag.appendChild(opt);
+            }
+            datalist.appendChild(frag);
+        } catch (e) { /* silent */ }
+    })();
+</script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<header class="topbar">
+    <div class="brand">
+        <span class="brand-mark">G</span>
+        <span>Status Board</span>
+    </div>
+    {% if active_tab %}
+    <nav class="nav-tabs" aria-label="主导航">
+        <a href="/" class="nav-tab {% if active_tab == 'home' %}active{% endif %}"
+           {% if active_tab == 'home' %}aria-current="page"{% endif %}>首页</a>
+        <a href="/board{% if username %}?username={{ username }}{% endif %}"
+           class="nav-tab {% if active_tab == 'board' %}active{% endif %}"
+           {% if active_tab == 'board' %}aria-current="page"{% endif %}>看板</a>
+    </nav>
+    {% endif %}
+    <div class="topbar-spacer"></div>
+    <button type="button" class="theme-toggle" id="theme-toggle"
+            aria-label="切换主题" title="切换主题 (Light / Dark / Auto)">
+        <span aria-hidden="true">◐</span>
+    </button>
+    {% if username %}
+    <span class="topbar-meta">@{{ username }}</span>
+    {% endif %}
+</header>
+<script>
+    // Theme: persist per-username; toggle cycle = light -> dark -> auto
+    (function () {
+        const KEY = 'theme';
+        const root = document.documentElement;
+        const meta = document.querySelector('meta[name="user-theme"]');
+        const initial = meta && meta.content ? meta.content : 'auto';
+
+        function apply(theme) {
+            if (theme === 'auto') {
+                root.removeAttribute('data-theme');
+            } else {
+                root.setAttribute('data-theme', theme);
+            }
+        }
+        apply(initial);
+        try { localStorage.setItem(KEY, initial); } catch (e) {}
+
+        const btn = document.getElementById('theme-toggle');
+        if (!btn) return;
+        btn.addEventListener('click', async () => {
+            const cur = (function () {
+                try { return localStorage.getItem(KEY) || 'auto'; } catch (e) { return 'auto'; }
+            })();
+            const next = cur === 'auto' ? 'light' : cur === 'light' ? 'dark' : 'auto';
+            apply(next);
+            try { localStorage.setItem(KEY, next); } catch (e) {}
+            const unameMeta = document.querySelector('meta[name="username"]');
+            if (unameMeta && unameMeta.content) {
+                await fetch('/api/preferences', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: unameMeta.content, theme: next }),
+                }).catch(() => {});
+            }
+        });
+    })();
+</script>

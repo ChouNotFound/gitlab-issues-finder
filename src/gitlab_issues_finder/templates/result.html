@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="user-theme" content="{{ theme }}">
+    <meta name="username" content="{{ username }}">
+    <title>查询结果 — {{ username }} · GitLab Status Board</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="shell">
+    {% include "_nav.html" %}
+    <main class="shell-main" style="padding: 24px 32px;">
+
+        <div style="max-width: 1400px; margin: 0 auto; width: 100%;">
+            <header style="margin-bottom: 20px;">
+                <h1 style="font-size: 22px; margin: 0 0 4px; font-weight: 700;">
+                    @{{ username }}
+                    {% if labels %}
+                        <span style="color: var(--c-text-muted); font-weight: 400; margin: 0 6px;">·</span>
+                        {% for label in labels %}<span class="tag">{{ label }}</span>{% endfor %}
+                    {% endif %}
+                </h1>
+                <p style="margin: 0; color: var(--c-text-muted); font-size: 13px;">
+                    参与维度：
+                    <span class="reason-tag reason-assignee">assignee</span>
+                    <span class="reason-tag reason-mention">mention</span>
+                    <span class="reason-tag reason-author">author</span>
+                    <span class="reason-tag reason-reviewer">reviewer</span>
+                    <span class="reason-tag reason-label">label</span>
+                    <span style="margin-left: 12px;">
+                        命中 <strong style="color: var(--c-text);">{{ total_count }}</strong> 条
+                        （Issue {{ issue_count }} · MR {{ mr_count }}）
+                    </span>
+                </p>
+            </header>
+
+            {# ===== Issues 段 ===== #}
+            <section class="result-section">
+                <div class="section-header">
+                    <h2 class="section-title">Issues</h2>
+                    <span class="section-meta">{{ issue_count }} 条</span>
+                </div>
+                {% if issues %}
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>IID</th>
+                                <th>Title</th>
+                                <th>状态</th>
+                                <th>命中维度</th>
+                                <th>Labels</th>
+                                <th>Assignee</th>
+                                <th>更新</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item, reasons in issues %}
+                            <tr>
+                                <td><span class="num">#{{ item.iid }}</span><span class="cell-meta">p{{ item.project_id }}</span></td>
+                                <td class="cell-title">
+                                    {% if item.web_url %}
+                                        <a href="{{ item.web_url }}" target="_blank" rel="noopener">{{ item.title }}</a>
+                                    {% else %}
+                                        {{ item.title }}
+                                    {% endif %}
+                                </td>
+                                <td><span class="badge-state badge-{{ item.state }}">{{ item.state }}</span></td>
+                                <td>
+                                    {% for r in reasons %}<span class="reason-tag reason-{{ r }}">{{ r }}</span>{% endfor %}
+                                </td>
+                                <td>
+                                    {% for label in item.labels %}<span class="tag">{{ label }}</span>{% endfor %}
+                                </td>
+                                <td>{{ item.assignee or '-' }}</td>
+                                <td><span class="num">{{ item.updated_at[:10] }}</span></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="card empty-state">
+                    <div class="empty-state-icon">📭</div>
+                    <p>未找到相关 issues。</p>
+                    <p class="home-tip">可能原因：用户名拼写错误、暂无相关条目、或 Token 没有访问相应项目的权限。</p>
+                </div>
+                {% endif %}
+            </section>
+
+            {# ===== Merge Requests 段 ===== #}
+            <section class="result-section">
+                <div class="section-header">
+                    <h2 class="section-title">Merge Requests</h2>
+                    <span class="section-meta">{{ mr_count }} 条</span>
+                </div>
+                {% if merge_requests %}
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>IID</th>
+                                <th>Title</th>
+                                <th>状态</th>
+                                <th>命中维度</th>
+                                <th>Labels</th>
+                                <th>Assignee</th>
+                                <th>更新</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item, reasons in merge_requests %}
+                            <tr>
+                                <td><span class="num">!{{ item.iid }}</span><span class="cell-meta">p{{ item.project_id }}</span></td>
+                                <td class="cell-title">
+                                    {% if item.web_url %}
+                                        <a href="{{ item.web_url }}" target="_blank" rel="noopener">{{ item.title }}</a>
+                                    {% else %}
+                                        {{ item.title }}
+                                    {% endif %}
+                                </td>
+                                <td><span class="badge-state badge-{{ item.state }}">{{ item.state }}</span></td>
+                                <td>
+                                    {% for r in reasons %}<span class="reason-tag reason-{{ r }}">{{ r }}</span>{% endfor %}
+                                </td>
+                                <td>
+                                    {% for label in item.labels %}<span class="tag">{{ label }}</span>{% endfor %}
+                                </td>
+                                <td>{{ item.assignee or '-' }}</td>
+                                <td><span class="num">{{ item.updated_at[:10] }}</span></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="card empty-state">
+                    <div class="empty-state-icon">📭</div>
+                    <p>未找到相关 merge requests。</p>
+                </div>
+                {% endif %}
+            </section>
+
+            <div style="margin-top: 32px; display: flex; gap: 12px; justify-content: center;">
+                <a href="/" class="btn">← 回到首页</a>
+                <a href="/board?username={{ username }}" class="btn btn-primary">打开看板 →</a>
+            </div>
+        </div>
+    </main>
+</div>
+</body>
+</html>
