@@ -30,6 +30,10 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# pre-commit cache
+.pre-commit-cache/
+Thumbs.db
+
 # Runtime data
 data/
 uvicorn.*.log

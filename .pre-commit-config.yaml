@@ -1,0 +1,33 @@
+# pre-commit runs the same checks as CI locally before commit.
+# Install once:  pip install pre-commit && pre-commit install
+# Run on all files:  pre-commit run --all-files
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$|\.lock$'
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: check-merge-conflict
+      - id: debug-statements
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest (skip pre-commit; use `pytest` directly)
+        entry: echo "Run 'pytest' separately; pre-commit is for fast hooks only"
+        language: system
+        pass_filenames: false
+        stages: [manual]
+        always_run: false

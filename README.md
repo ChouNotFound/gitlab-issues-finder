@@ -199,6 +199,26 @@ gitlab-issues-finder/
 - 触发限流返回 `429 Too Many Requests` + `Retry-After` header。
 - 信任反代时建议把 `RATE_LIMIT_RPM` 设为 0（关掉），由反代层做限流。
 
+## 🧪 本地开发
+
+```bash
+pip install -r requirements-dev.txt
+pip install pre-commit
+pre-commit install   # 一次性：装 git pre-commit hook
+```
+
+之后每次 ``git commit`` 都会自动跑 ruff + ruff-format + 通用
+健全性检查（trailing whitespace / EOF newline / YAML 校验 等）。
+不阻断提交：失败时 ``git commit`` 仍可继续，但建议先修。
+
+要本地手动跑全部：
+
+```bash
+pre-commit run --all-files
+pytest -v
+mypy src/gitlab_issues_finder
+```
+
 ## ✅ 运行测试
 
 ```bash
