@@ -26,6 +26,7 @@ import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import gitlab
 from fastapi import Body, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -34,7 +35,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from gitlab_issues_finder import storage
 from gitlab_issues_finder.client import build_client
-import gitlab
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.logging_setup import get_logger
