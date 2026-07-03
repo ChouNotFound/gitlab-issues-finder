@@ -44,6 +44,12 @@ GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx   # scope: read_api
 ### 3. 启动
 
 ```bash
+python -m gitlab_issues_finder --version   # 输出版本号后退出
+```
+
+### 3. 启动（可选参数 --version）
+
+```bash
 uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 ```
 

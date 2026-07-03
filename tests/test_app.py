@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -1387,3 +1388,25 @@ class TestHealthExtraFields:
         # 原有字段保留
         assert "status" in data
         assert "checks" in data
+
+
+class TestMainCLI:
+    def test_version_flag_prints_version(self, capsys, monkeypatch):
+        from gitlab_issues_finder.__main__ import main
+
+        monkeypatch.setattr(sys, "argv", ["gitlab_issues_finder", "--version"])
+        main()
+        captured = capsys.readouterr()
+        assert captured.out.startswith("gitlab-issues-finder ")
+        # 应该含版本号
+        import re
+
+        assert re.search(r"\d+\.\d+\.\d+", captured.out), captured.out
+
+    def test_short_version_flag(self, capsys, monkeypatch):
+        from gitlab_issues_finder.__main__ import main
+
+        monkeypatch.setattr(sys, "argv", ["gitlab_issues_finder", "-V"])
+        main()
+        captured = capsys.readouterr()
+        assert "gitlab-issues-finder" in captured.out
