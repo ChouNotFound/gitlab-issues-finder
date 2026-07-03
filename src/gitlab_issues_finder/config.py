@@ -73,9 +73,6 @@ class AppConfig:
         if page_size < 1 or page_size > 100:
             raise ConfigError("PAGE_SIZE 必须在 1-100 之间（GitLab API 上限）。")
 
-        db_path = os.environ.get("DB_PATH", "data/app.db")
-        import sys
-        print(f"DEBUG from_env: DB_PATH={db_path!r}", file=sys.stderr)
         return cls(
             url=url,
             token=token,
@@ -84,5 +81,5 @@ class AppConfig:
             web_host=os.environ.get("WEB_HOST", "127.0.0.1"),
             web_port=web_port,
             page_size=page_size,
-            db_path=db_path,
+            db_path=os.environ.get("DB_PATH", "data/app.db"),
         )

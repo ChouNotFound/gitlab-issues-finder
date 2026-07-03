@@ -12,7 +12,10 @@ import pytest
 import responses
 
 from gitlab_issues_finder.queries import (
+    ItemKind,
+    Relation,
     dedupe,
+    fetch_items,
     fetch_issues_by_assignee,
     fetch_issues_by_author,
     fetch_issues_by_mention,
@@ -302,3 +305,65 @@ class TestFetchUsers:
         responses.add(responses.GET, f"{API_BASE}/users", json=[], status=200)
         result = fetch_users(gl)
         assert result == []
+
+
+class TestFetchItemsFactory:
+    """验证新的 fetch_items() 工厂：参数路由、错误边界。"""
+
+    @responses.activate
+    @pytest.mark.parametrize("relation,param", [
+        (Relation.ASSIGNEE, "assignee_username"),
+        (Relation.MENTION, "mention_username"),
+        (Relation.AUTHOR, "author_username"),
+    ])
+    def test_fetch_items_issue_all_relations(self, gl, relation, param):
+        _add_user_endpoint(responses)
+        _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_assigned.json")])
+        result = fetch_items(gl, "alice", relation, ItemKind.ISSUE)
+        assert all(it.type == "issue" for it in result)
+        _assert_query_param(responses.calls[-1].request.url, param, "alice")
+
+    @responses.activate
+    @pytest.mark.parametrize("relation,param", [
+        (Relation.ASSIGNEE, "assignee_username"),
+        (Relation.MENTION, "mention_username"),
+        (Relation.AUTHOR, "author_username"),
+        (Relation.REVIEWER, "reviewer_username"),
+    ])
+    def test_fetch_items_mr_all_relations(self, gl, relation, param):
+        _add_user_endpoint(responses)
+        _add_paginated_endpoint(responses, "/merge_requests", [load_fixture("mr_mentioned.json")])
+        result = fetch_items(gl, "alice", relation, ItemKind.MERGE_REQUEST)
+        assert all(it.type == "merge_request" for it in result)
+        _assert_query_param(responses.calls[-1].request.url, param, "alice")
+
+    def test_reviewer_relation_rejected_for_issue(self, gl):
+        """reviewer_username 在 GitLab API 中只适用于 MR。"""
+        with __import__("pytest").raises(ValueError, match="not valid for kind"):
+            fetch_items(gl, "alice", Relation.REVIEWER, ItemKind.ISSUE)
+
+    @responses.activate
+    def test_fetch_items_always_passes_with_membership_false(self, gl):
+        _add_user_endpoint(responses)
+        _add_paginated_endpoint(responses, "/issues", [[]])
+        fetch_items(gl, "alice", Relation.ASSIGNEE, ItemKind.ISSUE)
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs.get("with_membership") == ["false"]
+
+
+class TestFetchLabeledKind:
+    """fetch_labeled() 的 kind 参数切换 issue / MR 端点。"""
+
+    @responses.activate
+    def test_labeled_issue_default(self, gl):
+        _add_user_endpoint(responses)
+        _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_labeled.json")])
+        result = fetch_labeled(gl, ["bug"], 100)
+        assert all(it.type == "issue" for it in result)
+
+    @responses.activate
+    def test_labeled_merge_request(self, gl):
+        _add_user_endpoint(responses)
+        _add_paginated_endpoint(responses, "/merge_requests", [load_fixture("mr_labeled.json")])
+        result = fetch_labeled(gl, ["bug"], 100, kind=ItemKind.MERGE_REQUEST)
+        assert all(it.type == "merge_request" for it in result)

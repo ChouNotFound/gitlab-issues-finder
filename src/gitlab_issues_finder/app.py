@@ -37,16 +37,11 @@ from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.models import IssueRef
 from gitlab_issues_finder.queries import (
+    ItemKind,
+    Relation,
     dedupe,
-    fetch_issues_by_assignee,
-    fetch_issues_by_author,
-    fetch_issues_by_mention,
+    fetch_items,
     fetch_labeled,
-    fetch_merge_requests_by_assignee,
-    fetch_merge_requests_by_author,
-    fetch_merge_requests_by_labels,
-    fetch_merge_requests_by_mention,
-    fetch_merge_requests_by_reviewer,
     fetch_users,
 )
 
@@ -136,23 +131,22 @@ async def search(
     cfg = AppConfig.from_env()
     gl = build_client(cfg)
 
+    issue_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR)
     issue_lists: dict[str, list[IssueRef]] = {
-        "assignee": fetch_issues_by_assignee(gl, username, cfg.page_size),
-        "mention": fetch_issues_by_mention(gl, username, cfg.page_size),
-        "author": fetch_issues_by_author(gl, username, cfg.page_size),
+        rel.value: fetch_items(gl, username, rel, ItemKind.ISSUE, cfg.page_size)
+        for rel in issue_relations
     }
+    mr_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR, Relation.REVIEWER)
     mr_lists: dict[str, list[IssueRef]] = {
-        "assignee": fetch_merge_requests_by_assignee(gl, username, cfg.page_size),
-        "mention": fetch_merge_requests_by_mention(gl, username, cfg.page_size),
-        "author": fetch_merge_requests_by_author(gl, username, cfg.page_size),
-        "reviewer": fetch_merge_requests_by_reviewer(gl, username, cfg.page_size),
+        rel.value: fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, cfg.page_size)
+        for rel in mr_relations
     }
 
     issues_labeled: list[IssueRef] = []
     mrs_labeled: list[IssueRef] = []
     if label_list:
         issues_labeled = fetch_labeled(gl, label_list, cfg.page_size)
-        mrs_labeled = fetch_merge_requests_by_labels(gl, label_list, cfg.page_size)
+        mrs_labeled = fetch_labeled(gl, label_list, cfg.page_size, kind=ItemKind.MERGE_REQUEST)
 
     all_items = dedupe(
         *issue_lists.values(), *mr_lists.values(),
@@ -251,16 +245,15 @@ async def board(
     cfg = AppConfig.from_env()
     gl = build_client(cfg)
 
+    issue_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR)
     issue_lists: dict[str, list[IssueRef]] = {
-        "assignee": fetch_issues_by_assignee(gl, username, cfg.page_size),
-        "mention": fetch_issues_by_mention(gl, username, cfg.page_size),
-        "author": fetch_issues_by_author(gl, username, cfg.page_size),
+        rel.value: fetch_items(gl, username, rel, ItemKind.ISSUE, cfg.page_size)
+        for rel in issue_relations
     }
+    mr_relations = (Relation.ASSIGNEE, Relation.MENTION, Relation.AUTHOR, Relation.REVIEWER)
     mr_lists: dict[str, list[IssueRef]] = {
-        "assignee": fetch_merge_requests_by_assignee(gl, username, cfg.page_size),
-        "mention": fetch_merge_requests_by_mention(gl, username, cfg.page_size),
-        "author": fetch_merge_requests_by_author(gl, username, cfg.page_size),
-        "reviewer": fetch_merge_requests_by_reviewer(gl, username, cfg.page_size),
+        rel.value: fetch_items(gl, username, rel, ItemKind.MERGE_REQUEST, cfg.page_size)
+        for rel in mr_relations
     }
 
     issues_labeled: list[IssueRef] = []
@@ -268,7 +261,7 @@ async def board(
     label_list = [s.strip() for s in q.split(",") if s.strip()] if q else []
     if label_list:
         issues_labeled = fetch_labeled(gl, label_list, cfg.page_size)
-        mrs_labeled = fetch_merge_requests_by_labels(gl, label_list, cfg.page_size)
+        mrs_labeled = fetch_labeled(gl, label_list, cfg.page_size, kind=ItemKind.MERGE_REQUEST)
 
     key_to_reasons: dict[tuple[str, int, int], list[str]] = {}
     for reason, lst in {**issue_lists, **mr_lists}.items():

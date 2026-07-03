@@ -285,7 +285,7 @@ class TestBoardRoute:
             assert t in resp.text, f"missing MR (relation view): {t}"
 
     def test_board_calls_4_mr_queries(self, client, monkeypatch, tmp_db):
-        """username 非空时应触发 4 个 MR 维度查询。"""
+        """username 非空时应触发 3 issue + 4 MR = 7 次 fetch_items 调用。"""
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
 
@@ -296,17 +296,13 @@ class TestBoardRoute:
             return []
 
         from gitlab_issues_finder import app as app_module
-        monkeypatch.setattr(app_module, "fetch_merge_requests_by_assignee", fake_fetch)
-        monkeypatch.setattr(app_module, "fetch_merge_requests_by_mention", fake_fetch)
-        monkeypatch.setattr(app_module, "fetch_merge_requests_by_author", fake_fetch)
-        monkeypatch.setattr(app_module, "fetch_merge_requests_by_reviewer", fake_fetch)
-        monkeypatch.setattr(app_module, "fetch_issues_by_assignee", fake_fetch)
-        monkeypatch.setattr(app_module, "fetch_issues_by_mention", fake_fetch)
-        monkeypatch.setattr(app_module, "fetch_issues_by_author", fake_fetch)
+        monkeypatch.setattr(app_module, "fetch_items", fake_fetch)
 
         resp = client.get("/board?username=alice")
         assert resp.status_code == 200
-        assert calls["count"] == 7  # 4 MR + 3 issue
+        # /board 路径下 summary/all/issues/mrs 视图各拉一次完整 7 维度，
+        # 实际取决于 view 参数；默认 summary 触发 7 次 (3 issue + 4 MR)。
+        assert calls["count"] == 7
 
 
 class TestBoardApi:
