@@ -99,6 +99,8 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 | `PATCH` | `/api/board/columns/{cid}` | 重命名列 |
 | `DELETE` | `/api/board/columns/{cid}` | 删除自定义列 |
 | `POST` | `/api/preferences` | 主题 `{username, theme}` |
+| GET  | /api/version | 应用 + Python + FastAPI 版本 |
+| GET  | /api/health | 健康检查（DB + config） |
 
 > 拖拽与列管理**仅本地**，不调任何 mutation API；看板始终只需 `read_api` Token。
 
