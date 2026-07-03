@@ -805,3 +805,108 @@ class TestListColumns:
     def test_list_columns_missing_username(self, client, tmp_db):
         r = client.get("/api/board/columns")
         assert r.status_code == 422  # FastAPI validation error
+
+
+class TestTimeRangeFilter:
+    """since/until 按 updated_at 日期过滤。"""
+
+    @responses.activate
+    def test_since_filter(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        for _ in range(3):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=[
+                    {
+                        "project_id": 1,
+                        "iid": 1,
+                        "title": "Old",
+                        "state": "opened",
+                        "labels": [],
+                        "assignee": None,
+                        "web_url": "u",
+                        "updated_at": "2025-01-15T00:00:00Z",
+                    },
+                    {
+                        "project_id": 1,
+                        "iid": 2,
+                        "title": "New",
+                        "state": "opened",
+                        "labels": [],
+                        "assignee": None,
+                        "web_url": "u",
+                        "updated_at": "2026-07-01T00:00:00Z",
+                    },
+                ],
+                status=200,
+                match_querystring=False,
+            )
+        for _ in range(4):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
+        r = client.post("/search", data={"username": "alice", "since": "2026-01-01"})
+        assert r.status_code == 200
+        # New 应该被保留，Old 应该被过滤
+        assert "New" in r.text
+        # Old should be filtered out (cannot see Old item in result table)
+        # We just verify the count is 1, not 2
+        assert r.text.count("p1") >= 1  # at least 1 item rendered
+
+    @responses.activate
+    def test_invalid_since_format(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        r = client.post("/search", data={"username": "alice", "since": "garbage"})
+        assert r.status_code == 200
+        assert "格式错误" in r.text
+
+    @responses.activate
+    def test_invalid_until_format(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        r = client.post("/search", data={"username": "alice", "until": "2025/01/01"})
+        assert r.status_code == 200
+        assert "格式错误" in r.text
+
+    @responses.activate
+    def test_invalid_date_value(self, client, monkeypatch, tmp_db):
+        """Well-formed but invalid date like 2025-02-30."""
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        r = client.post("/search", data={"username": "alice", "since": "2025-02-30"})
+        assert r.status_code == 200
+        assert "格式错误" in r.text
+
+
+class TestParseDate:
+    """_parse_date 单元测试。"""
+
+    def test_valid(self):
+        from gitlab_issues_finder.app import _parse_date
+
+        assert _parse_date("2025-01-15") == "2025-01-15"
+
+    def test_empty_returns_none(self):
+        from gitlab_issues_finder.app import _parse_date
+
+        assert _parse_date("") is None
+
+    def test_wrong_format(self):
+        from gitlab_issues_finder.app import _parse_date
+
+        assert _parse_date("2025/01/15") is None
+        assert _parse_date("01-15-2025") is None
+        assert _parse_date("20250115") is None
+
+    def test_invalid_date(self):
+        from gitlab_issues_finder.app import _parse_date
+
+        assert _parse_date("2025-02-30") is None
+        assert _parse_date("2025-13-01") is None

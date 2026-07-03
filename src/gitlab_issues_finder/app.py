@@ -132,6 +132,35 @@ def _db_path() -> str:
     return os.environ.get("DB_PATH", "data/app.db")
 
 
+_SINCE_UNTIL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_date(raw: str) -> str | None:
+    """验证 YYYY-MM-DD 格式。返回原串或 None。"""
+    if not raw:
+        return None
+    if not _SINCE_UNTIL_RE.match(raw):
+        return None
+    # 简单合法性检查（拒绝 2025-02-30 之类）
+    import datetime as _dt
+
+    try:
+        _dt.date.fromisoformat(raw)
+    except ValueError:
+        return None
+    return raw
+
+
+def _filter_by_time(items, since: str | None, until: str | None):
+    """按 updated_at[:10] in [since, until] 过滤（闭区间）。"""
+    out = list(items)
+    if since:
+        out = [it for it in out if it.updated_at[:10] >= since]
+    if until:
+        out = [it for it in out if it.updated_at[:10] <= until]
+    return out
+
+
 def _validate_username(raw: str) -> str | None:
     raw = raw.strip()
     if not raw or len(raw) > 255:
@@ -165,6 +194,8 @@ async def search(
     request: Request,
     username: str = Form(...),
     labels: str = Form(""),
+    since: str = Form(""),
+    until: str = Form(""),
 ) -> HTMLResponse:
     """查询与 username 相关的所有 opened issue / MR 并按类型分两段展示。
 
@@ -178,7 +209,17 @@ async def search(
         return _render_error(request, "请输入有效的 GitLab 用户名", "输入为空")
 
     label_list = [s.strip() for s in labels.split(",") if s.strip()]
-    logger.info("search requested", extra={"username": username, "labels": label_list})
+    # 时间范围参数先于 GitLab 调用验证（避免无效参数时仍然跑 7 个 API）
+    s_date = _parse_date(since)
+    u_date = _parse_date(until)
+    if since and not s_date:
+        return _render_error(request, "since 格式错误：应为 YYYY-MM-DD", "参数错误")
+    if until and not u_date:
+        return _render_error(request, "until 格式错误：应为 YYYY-MM-DD", "参数错误")
+    logger.info(
+        "search requested",
+        extra={"username": username, "labels": label_list, "since": s_date, "until": u_date},
+    )
 
     cfg = AppConfig.from_env()
     gl = build_client(cfg)
@@ -206,6 +247,7 @@ async def search(
         issues_labeled,
         mrs_labeled,
     )
+    all_items = _filter_by_time(all_items, s_date, u_date)
     # 解析项目名（用于模板显示）
     project_info: dict = {}
     try:
@@ -272,6 +314,8 @@ async def board(
     username: str = Query("", alias="username"),
     q: str = Query("", description="搜索过滤"),
     view: str = Query("summary", description="视图模式: summary|all|issues|mrs|relation|project"),
+    since: str = Query("", description="只看 updated_at >= 此日期 (YYYY-MM-DD)"),
+    until: str = Query("", description="只看 updated_at <= 此日期 (YYYY-MM-DD)"),
 ) -> HTMLResponse:
     """Git 状态看板（控制台样式）。
 
@@ -311,6 +355,14 @@ async def board(
     if view not in allowed_views:
         view = "summary"
 
+    # 时间范围参数先验证
+    s_date_b = _parse_date(since)
+    u_date_b = _parse_date(until)
+    if since and not s_date_b:
+        return _render_error(request, "since 格式错误：应为 YYYY-MM-DD", "参数错误")
+    if until and not u_date_b:
+        return _render_error(request, "until 格式错误：应为 YYYY-MM-DD", "参数错误")
+
     cfg = AppConfig.from_env()
     gl = build_client(cfg)
 
@@ -343,6 +395,7 @@ async def board(
         issues_labeled,
         mrs_labeled,
     )
+    all_items = _filter_by_time(all_items, s_date_b, u_date_b)
     # 解析项目名（用于模板显示）
     board_project_info: dict = {}
     try:
