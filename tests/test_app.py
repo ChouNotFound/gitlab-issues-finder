@@ -16,7 +16,9 @@ API_BASE = "https://gitlab.test/api/v4"
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(app)
+    # Use context manager so FastAPI lifespan (startup/shutdown) fires.
+    with TestClient(app) as c:
+        yield c
 
 
 class TestIndexRoute:
@@ -186,6 +188,20 @@ class TestSearchRoute:
         resp = client.post("/search", data={"username": "alice"})
         assert resp.status_code == 200
         assert "认证失败" in resp.text
+
+
+class TestDbPathDecoupling:
+    """验证 _db_path() 不依赖 GITLAB_URL/TOKEN：看板本地状态应始终可读写。"""
+
+    def test_db_path_works_without_gitlab_config(self, tmp_db):
+        """没有 GITLAB_URL/TOKEN 时仍能读写看板状态。"""
+        # 显式清掉（如果 clean_env 被设过）
+        from gitlab_issues_finder.app import _db_path
+        with __import__("pytest").MonkeyPatch().context() as m:
+            for k in ("GITLAB_URL", "GITLAB_TOKEN"):
+                m.delenv(k, raising=False)
+            # 但 DB_PATH 保留 tmp_db 设置的值
+            assert _db_path() == tmp_db
 
 
 class TestStaticFiles:

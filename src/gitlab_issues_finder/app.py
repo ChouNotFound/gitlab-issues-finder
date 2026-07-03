@@ -20,7 +20,9 @@ JSON API：
 
 from __future__ import annotations
 
+import os
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -53,30 +55,35 @@ _PACKAGE_DIR = Path(__file__).resolve().parent
 _TEMPLATES_DIR = _PACKAGE_DIR / "templates"
 _STATIC_DIR = _PACKAGE_DIR / "static"
 
-app = FastAPI(title="GitLab Status Board")
+# ----- App 生命周期：初始化 SQLite -----
+# FastAPI >=0.110 推荐用 lifespan context manager 替换 @app.on_event。
+# 配置缺失时启动不抛错：首次访问 /search 时再让用户看到错误页。
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # 启动时初始化 SQLite schema。配置缺失时静默忽略：首次访问 /search 时再让用户看到错误页。
+    try:
+        cfg = AppConfig.from_env()
+        storage.init_db(cfg.db_path)
+    except ConfigError:
+        pass
+    yield
+    # shutdown: 暂无需清理（SQLite 连接随用随关）
+
+
+app = FastAPI(title="GitLab Status Board", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
-# ----- App 启动钩子：初始化 SQLite -----
-@app.on_event("startup")
-def _on_startup() -> None:
-    try:
-        cfg = AppConfig.from_env()
-        storage.init_db(cfg.db_path)
-    except ConfigError:
-        # 配置缺失启动时不抛错；首次访问 /search 时再让用户看到错误页
-        pass
-
-
 # ----- 工具函数 -----
 def _db_path() -> str:
-    """从环境取 DB_PATH。"""
-    try:
-        return AppConfig.from_env().db_path
-    except ConfigError:
-        return "data/app.db"
+    """从环境取 DB_PATH。
+
+    与 AppConfig 解耦：DB_PATH 不依赖 GITLAB_URL/TOKEN，
+    即使 GitLab 配置缺失也能读写本地看板状态。
+    """
+    return os.environ.get("DB_PATH", "data/app.db")
 
 
 def _validate_username(raw: str) -> str | None:

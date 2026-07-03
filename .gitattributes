@@ -1,0 +1,32 @@
+# Normalize line endings (Windows-friendly)
+* text=auto eol=lf
+
+# Python source: LF
+*.py text eol=lf
+*.pyi text eol=lf
+
+# Batch and shell scripts: keep CRLF for Windows .ps1/.bat, LF for .sh
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.sh text eol=lf
+
+# Templates / static assets: LF
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
+*.svg text eol=lf
+
+# Markdown / text: LF
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.env* text eol=lf
+
+# Binary
+*.db binary
+*.png binary
+*.jpg binary
+*.ico binary
