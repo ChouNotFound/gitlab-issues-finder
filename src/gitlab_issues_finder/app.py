@@ -27,6 +27,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, Form, HTTPException, Query, Request
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -36,6 +37,7 @@ from gitlab_issues_finder.client import build_client
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.logging_setup import get_logger
+from gitlab_issues_finder.rate_limit import get_default_limiter
 from gitlab_issues_finder.middleware import RequestIDMiddleware
 from gitlab_issues_finder.models import IssueRef
 from gitlab_issues_finder.project_resolver import resolve as resolve_projects
@@ -87,6 +89,28 @@ app = FastAPI(
         {"name": "System", "description": "Version, health, and diagnostics."},
     ],
 )
+
+
+class _RateLimitMiddleware(BaseHTTPMiddleware):
+    """Per-IP token bucket. Returns 429 + Retry-After when exhausted."""
+
+    async def dispatch(self, request, call_next):
+        limiter = get_default_limiter()
+        if limiter.per_minute <= 0:
+            return await call_next(request)
+        # Use X-Forwarded-For first hop if present, else client.host
+        xff = request.headers.get("x-forwarded-for")
+        ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else "anon")
+        if not limiter.hit(ip):
+            retry_after = max(1, int(60 / max(limiter.per_minute, 1)))
+            return JSONResponse(
+                {"detail": "rate limit exceeded", "retry_after_seconds": retry_after},
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+            )
+        return await call_next(request)
+
+app.add_middleware(_RateLimitMiddleware)
 app.add_middleware(RequestIDMiddleware)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
