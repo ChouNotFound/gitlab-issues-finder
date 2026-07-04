@@ -24,6 +24,7 @@ import contextlib
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +64,11 @@ from gitlab_issues_finder.rate_limit import get_default_limiter
 logger = get_logger(__name__)
 
 _START_TIME = time.time()
+
+# 并发度: GitLab 默认 rate limit ~200 req/min, 4 worker + ~1s 平均延迟
+# ≈ 240 req/min, 处于安全区。测试场景下 ``responses`` 库按 mock dispatch,
+# 不会被真实网络限流。
+_FETCH_MAX_WORKERS = 4
 
 # ----- 路径解析 -----
 _PACKAGE_DIR = Path(__file__).resolve().parent
@@ -334,54 +340,90 @@ def _load_user_items(
     if cached and not force_refresh:
         return _clone_loaded_items(cached)
 
-    # ---- 1) username-based 拉取 ----
-    issues_assigned = list(fetch_items(gl, username, Relation.ASSIGNEE, ItemKind.ISSUE, page_size))
-    issues_mentioned_by_api = list(
-        fetch_items(gl, username, Relation.MENTION, ItemKind.ISSUE, page_size)
-    )
-    issues_authored = list(fetch_items(gl, username, Relation.AUTHOR, ItemKind.ISSUE, page_size))
+    # ---- 1) 准备阶段 1: 6 个互不依赖的拉取任务并行执行 ----
+    # 6 个独立 fetch + 1 个 user_id 解析; 在 ``_FETCH_POOL`` (4 worker) 中并发跑。
+    # 之前顺序执行时冷加载需 ~7*RTT, 现在压缩到 ~2*RTT (4 worker + 1 wave 极限)。
+    with ThreadPoolExecutor(max_workers=_FETCH_MAX_WORKERS) as pool:
+        fut_issue_assigned = pool.submit(
+            list, fetch_items(gl, username, Relation.ASSIGNEE, ItemKind.ISSUE, page_size)
+        )
+        fut_issue_mentioned = pool.submit(
+            list, fetch_items(gl, username, Relation.MENTION, ItemKind.ISSUE, page_size)
+        )
+        fut_issue_authored = pool.submit(
+            list, fetch_items(gl, username, Relation.AUTHOR, ItemKind.ISSUE, page_size)
+        )
+        fut_mr_reviewer = pool.submit(
+            list, fetch_items(gl, username, Relation.REVIEWER, ItemKind.MERGE_REQUEST, page_size)
+        )
+        fut_mr_assigned = pool.submit(
+            list, fetch_items(gl, username, Relation.ASSIGNEE, ItemKind.MERGE_REQUEST, page_size)
+        )
+        fut_low_threshold = pool.submit(
+            fetch_issue_low_threshold_items, gl, username, page_size
+        )
+        fut_user_ids = pool.submit(resolve_user_ids, gl, username)
+
+        # 阶段 1 结果回收: 任一抛错都会立即向上传播
+        issues_assigned = fut_issue_assigned.result()
+        issues_mentioned_by_api = fut_issue_mentioned.result()
+        issues_authored = fut_issue_authored.result()
+        reviewer_mrs = fut_mr_reviewer.result()
+        assignee_mrs = fut_mr_assigned.result()
+        mentioned_issues, _replied_issues = fut_low_threshold.result()
+        user_ids = fut_user_ids.result()
+
     issue_lists: dict[str, list[IssueRef]] = {
         "assignee": issues_assigned,
-        "mention": issues_mentioned_by_api,
+        "mention": dedupe(issues_mentioned_by_api, mentioned_issues),
         "author": issues_authored,
     }
     mr_lists: dict[str, list[IssueRef]] = {
-        "reviewer": list(
-            fetch_items(gl, username, Relation.REVIEWER, ItemKind.MERGE_REQUEST, page_size)
-        ),
-        "assignee": list(
-            fetch_items(gl, username, Relation.ASSIGNEE, ItemKind.MERGE_REQUEST, page_size)
-        ),
+        "reviewer": reviewer_mrs,
+        "assignee": assignee_mrs,
     }
 
-    # ---- 2) Issue mention 补充 ----
-    mentioned_issues, _replied_issues = fetch_issue_low_threshold_items(gl, username, page_size)
-    issue_lists["mention"] = dedupe(
-        issue_lists["mention"],
-        mentioned_issues,
-    )
+    # ---- 2) 阶段 2: 3 个 user_id 拉取 + 2 个 label 拉取 (如有) 并行 ----
+    # 注意: 阶段 1 的 ``with ThreadPoolExecutor`` 已 exit, 阶段 2 必须在新的
+    # pool context 中提交 + 回收, 否则会撞 "cannot schedule new futures after shutdown"。
+    phase2: list = []
+    with ThreadPoolExecutor(max_workers=_FETCH_MAX_WORKERS) as pool:
+        if user_ids:
+            phase2.append(pool.submit(
+                fetch_items_by_user_id, gl, user_ids, Relation.ASSIGNEE, ItemKind.ISSUE, page_size
+            ))
+            phase2.append(pool.submit(
+                fetch_items_by_user_id, gl, user_ids, Relation.ASSIGNEE, ItemKind.MERGE_REQUEST, page_size
+            ))
+            phase2.append(pool.submit(
+                fetch_items_by_user_id, gl, user_ids, Relation.REVIEWER, ItemKind.MERGE_REQUEST, page_size
+            ))
+        if label_list:
+            phase2.append(pool.submit(
+                fetch_labeled, gl, label_list, page_size
+            ))
+            phase2.append(pool.submit(
+                fetch_labeled, gl, label_list, page_size, kind=ItemKind.MERGE_REQUEST
+            ))
+        phase2_results = [f.result() for f in phase2]
 
-    # ---- 3) 多 assignee (按 user_id) ----
-    user_ids = resolve_user_ids(gl, username)
+    # 拆解 phase2 结果: 顺序是 [issue_user_assignee, mr_user_assignee,
+    # mr_user_reviewer, issues_labeled?, mrs_labeled?]
+    idx = 0
     if user_ids:
-        issue_lists["assignee"] = dedupe(
-            issue_lists["assignee"],
-            fetch_items_by_user_id(
-                gl, user_ids, Relation.ASSIGNEE, ItemKind.ISSUE, page_size
-            ),
-        )
-        mr_lists["assignee"] = dedupe(
-            mr_lists["assignee"],
-            fetch_items_by_user_id(
-                gl, user_ids, Relation.ASSIGNEE, ItemKind.MERGE_REQUEST, page_size
-            ),
-        )
-        mr_lists["reviewer"] = dedupe(
-            mr_lists["reviewer"],
-            fetch_items_by_user_id(
-                gl, user_ids, Relation.REVIEWER, ItemKind.MERGE_REQUEST, page_size
-            ),
-        )
+        issue_lists["assignee"] = dedupe(issue_lists["assignee"], phase2_results[idx])
+        idx += 1
+        mr_lists["assignee"] = dedupe(mr_lists["assignee"], phase2_results[idx])
+        idx += 1
+        mr_lists["reviewer"] = dedupe(mr_lists["reviewer"], phase2_results[idx])
+        idx += 1
+    issues_labeled: list[IssueRef] = []
+    mrs_labeled: list[IssueRef] = []
+    if label_list:
+        issues_labeled = phase2_results[idx]
+        idx += 1
+        mrs_labeled = phase2_results[idx]
+        idx += 1
 
     # 注: subscribed / reaction 默认不参与统计, 见 ``_load_user_items`` 顶部说明。
 

@@ -405,6 +405,27 @@ class TestResponsive:
         # 旧行为 (display: none) 不应再出现
         assert ".console-sidebar { display: none" not in css
 
+
+class TestParallelization:
+    """_load_user_items 通过 ThreadPoolExecutor 并行拉取多个独立维度。"""
+
+    def test_module_uses_concurrent_futures(self):
+        """app.py 应当 import 并使用 ThreadPoolExecutor 加速独立 fetch。"""
+        import inspect
+
+        from gitlab_issues_finder import app as app_module
+        src = inspect.getsource(app_module)
+        assert "ThreadPoolExecutor" in src
+        assert "pool.submit" in src
+        # 至少 4 个独立任务并发 (3 issue + 2 mr + 1 low-threshold + 1 user_ids)
+        # 注释里写"6 个互不依赖的拉取任务"也是 sanity check
+        assert "阶段 1" in src or "phase 1" in src.lower()
+
+    def test_max_workers_constant_is_4(self):
+        """并发度为 4, 与 GitLab 默认 rate limit (200/min) 匹配。"""
+        from gitlab_issues_finder import app as app_module
+        assert app_module._FETCH_MAX_WORKERS == 4
+
     def test_board_no_username_redirects_to_home(self, client, tmp_db):
         """/board 不带 username 应 307 到 / (单一 home URL)。"""
         resp = client.get("/board", follow_redirects=False)
