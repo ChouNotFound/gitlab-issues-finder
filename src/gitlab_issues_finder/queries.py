@@ -26,6 +26,7 @@ from enum import Enum
 from gitlab_issues_finder.client import GitlabClient, safe_http_get
 from gitlab_issues_finder.errors import (
     AuthError,
+    BadRequestError,
     GitlabTimeoutError,
     GitlabUnavailableError,
     NotFoundError,
@@ -103,8 +104,14 @@ def _iter_pages(
     GitLab 默认 per_page=20，最多 100。每次拉满 page_size，少于 page_size 即终止。
     path 默认 "/issues"，传 "/merge_requests" 等即可复用同一分页逻辑。
 
-    防御: 当 GitLab 不正确地返回等于 page_size 的最后一页 (罕见的客户端 / 服务端
-    bug 或 504 重试场景) 时, 硬上限 ``_MAX_PAGES`` 防止无限循环 + 内存爆炸。
+    防御:
+      1. 当 GitLab 不正确地返回等于 page_size 的最后一页 (罕见的客户端 / 服务端
+         bug 或 504 重试场景) 时, 硬上限 ``_MAX_PAGES`` 防止无限循环 + 内存爆炸。
+      2. 当响应不是 list (例如 GitLab 在某些错误路径返回 ``{"error": "..."}``,
+         但 client 没把状态码映射到异常) 时, ``yield from dict`` 会把字符串 key
+         当成 item 透传给下游, 触发 ``AttributeError: 'str' object has no
+         attribute 'get'``。这里显式断言 chunk 类型 + 过滤非 dict 项, 让上层
+         拿到的是干净的 dict 流。
     """
     page = 1
     while page <= _MAX_PAGES:
@@ -115,7 +122,24 @@ def _iter_pages(
         )
         if not chunk:
             return
-        yield from chunk
+        # 防御性: GitLab list 端点理论上返 list[dict], 但 client 不挡非 list
+        # (例如 200 OK + error body) 时, 这里至少别让字符串 key 透传到下游。
+        if not isinstance(chunk, list):
+            logger.debug(
+                "_iter_pages 收到非 list 响应 (%s) path=%s, 终止分页",
+                type(chunk).__name__,
+                path,
+            )
+            return
+        for item in chunk:
+            if isinstance(item, dict):
+                yield item
+            else:
+                logger.debug(
+                    "_iter_pages 跳过非 dict item (%s) path=%s",
+                    type(item).__name__,
+                    path,
+                )
         if len(chunk) < page_size:
             return
         page += 1
@@ -460,10 +484,13 @@ def fetch_issue_low_threshold_items(
     try:
         mentioned = _mentioned_via_search(gl, username, page_size) or []
         return mentioned, []
-    except (AuthError, NotFoundError, GitlabUnavailableError) as e:
+    except (AuthError, NotFoundError, BadRequestError, GitlabUnavailableError) as e:
         # /search 在某些 GitLab 版本需 admin, 个人 token 走不通时
         # AuthError (401/403) 或 NotFoundError (404) 都被 GitLab 端返
-        # 回; 5xx 也都回退到 N+1 路径, 永远不让主流程失败
+        # 回; 5xx 也都回退到 N+1 路径, 永远不让主流程失败。
+        # 典型 BadRequestError: GitLab 17+ 不再支持 ``/search?scope=notes``,
+        # 返 ``{"error": "scope does not have a valid value"}`` (HTTP 400),
+        # 走 fallback 远比顶 5xx 友好。
         logger.debug(
             "search-based mention detection unavailable, falling back: %s", e
         )

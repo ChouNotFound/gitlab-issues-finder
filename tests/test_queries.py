@@ -416,6 +416,40 @@ class TestMentionedViaSearch:
         mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
         assert [(it.project_id, it.iid) for it in mentioned] == [(201, 7)]
     @responses.activate
+    def test_search_400_falls_back_to_n_plus_1(self, gl):
+        """Bug 修复回归: 实际生产中 GitLab 17+ / 部分版本
+        ``/search?scope=notes`` 返 ``{"error": "scope does not have a valid value"}``
+        (HTTP 400)。http_get 现在把它映射成 BadRequestError,
+        fetch_issue_low_threshold_items 走 N+1 fallback 而不崩。"""
+        responses.add(
+            responses.GET, f"{API_BASE}/search",
+            json={"error": "scope does not have a valid value"}, status=400,
+            match_querystring=False,
+        )
+        responses.add(
+            responses.GET, f"{API_BASE}/search",
+            json=[], status=200,  # /search?scope=issues 也返空
+            match_querystring=False,
+        )
+        # 走 N+1 路径: /issues + per-issue /notes
+        _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_opened.json")])
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/201/issues/7/notes",
+            json=load_fixture("issue_notes_mentioned.json"),
+            status=200, match_querystring=False,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/202/issues/8/notes",
+            json=load_fixture("issue_notes_replied.json"),
+            status=200, match_querystring=False,
+        )
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
+        # 走 fallback 拿到与 baseline 一致的结果
+        assert [(it.project_id, it.iid) for it in mentioned] == [(201, 7)]
+
+    @responses.activate
     def test_search_skips_notes_without_issue(self, gl):
         """/search?scope=notes 返回的 note 若没挂 issue 字段, 应跳过。"""
         responses.add(
@@ -435,6 +469,54 @@ class TestMentionedViaSearch:
         _add_paginated_endpoint(responses, "/issues", [[]])
         mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
         assert mentioned == []
+class TestIterPagesDefensive:
+    """_iter_pages 防御性: 不应让非 list 响应 / 非 dict item 透传到下游。"""
+
+    @responses.activate
+    def test_dict_response_does_not_crash(self, gl):
+        """回归: GitLab 在某些错误路径 (例如 200 OK + error body) 会返 dict。
+        client 没挡 (按 4xx 状态码处理), _iter_pages 必须把这种情况挡掉,
+        不能 ``yield from dict`` 把字符串 key 当 item 透传。"""
+        responses.add(
+            responses.GET, f"{API_BASE}/search",
+            json={"error": "scope does not have a valid value"},
+            status=200,  # 注意: 状态码 200, 但 body 是 dict
+            match_querystring=False,
+        )
+        # 必须不抛, 直接终止分页, 返空
+        assert list(_iter_pages(gl, {"scope": "notes"}, 20, path="/search")) == []
+
+    @responses.activate
+    def test_non_dict_items_are_skipped(self, gl):
+        """防御: 列表里混了非 dict 项 (例如脏代理注入的字符串) 时,
+        _iter_pages 应跳过它们, 不让 ``note.get("issue")`` 炸。"""
+        responses.add(
+            responses.GET, f"{API_BASE}/issues",
+            json=[
+                {"project_id": 1, "iid": 1, "title": "ok"},
+                "stray-string",  # 脏数据
+                None,             # 脏数据
+                {"project_id": 2, "iid": 2, "title": "ok2"},
+            ],
+            status=200, match_querystring=False,
+        )
+        items = list(_iter_pages(gl, {"scope": "all"}, 100))
+        assert items == [
+            {"project_id": 1, "iid": 1, "title": "ok"},
+            {"project_id": 2, "iid": 2, "title": "ok2"},
+        ]
+
+    @responses.activate
+    def test_empty_list_stops_pagination(self, gl):
+        """空列表立即终止, 不发起后续页请求。"""
+        responses.add(
+            responses.GET, f"{API_BASE}/issues",
+            json=[], status=200, match_querystring=False,
+        )
+        assert list(_iter_pages(gl, {"scope": "all"}, 100)) == []
+        assert len(responses.calls) == 1
+
+
 class TestFetchMergeRequestsByLabels:
     @responses.activate
     def test_labels_passed_as_csv(self, gl):

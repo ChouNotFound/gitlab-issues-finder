@@ -215,6 +215,50 @@ class TestStatRowAndDimensions:
         assert reply_only.key not in loaded["key_to_reasons"]
         assert reply_only.key not in loaded["key_to_reason_details"]
 
+class TestBoardSearchBadRequestFallback:
+    """/search 返 4xx 时 /board 仍能 200 渲染。"""
+
+    @responses.activate
+    def test_board_returns_200_when_search_returns_400(self, client, monkeypatch, tmp_db):
+        """Bug 修复回归: 实际生产中 GitLab 17+ / 部分版本的
+        ``/search?scope=notes`` 返 ``{"error": "scope does not have a valid value"}``
+        (HTTP 400)。修复前: AttributeError 让 /board 500。修复后: client 把 400
+        映射成 BadRequestError, fetch 走 N+1 fallback, /board 仍 200。"""
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.queries import fetch_issue_low_threshold_items as real_low
+
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+
+        # /search 全部 400, 强制走 N+1 fallback
+        responses.add(
+            responses.GET, f"{API_BASE}/search",
+            json={"error": "scope does not have a valid value"},
+            status=400, match_querystring=False,
+        )
+        # N+1 fallback 的 /issues 端点
+        responses.add(
+            responses.GET, f"{API_BASE}/issues",
+            json=[], status=200, match_querystring=False,
+        )
+
+        # 解除 conftest 的 stub, 让 _load_user_items 走真实的
+        # fetch_issue_low_threshold_items, 命中真实的 _mentioned_via_search
+        monkeypatch.setattr(app_module, "fetch_issue_low_threshold_items", real_low)
+        # 关闭其他维度的网络 (保险, 让测试聚焦在 mention 路径)
+        monkeypatch.setattr(app_module, "fetch_items", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_subscribed", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_reacted", lambda *a, **kw: [])
+
+        resp = client.get("/board?username=alice")
+        # 修复前会 500, 修复后 200
+        assert resp.status_code == 200
+        # 至少触达了一次 /search (400 那次)
+        urls_called = [c.request.url for c in responses.calls]
+        assert any("/search" in u for u in urls_called), urls_called
+
     def test_load_user_items_dedupes_within_assignee_dimension(self, monkeypatch):
         """同一 item 通过 assignee_username 和 assignee_id 返回时，assignee 只计一次。"""
         from gitlab_issues_finder import app as app_module

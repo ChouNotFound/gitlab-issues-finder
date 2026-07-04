@@ -26,6 +26,15 @@ class AuthError(AppError):
     """Token 无效、过期或权限不足（401 / 403）。"""
 
 
+class BadRequestError(AppError):
+    """GitLab 返回 4xx 但不是认证/权限/限流/资源不存在 (HTTP 400 / 422)。
+
+    最常见场景: ``/search?scope=notes`` 在某些 GitLab 版本不可用, 返
+    回 ``{"error": "scope does not have a valid value"}``。上层应在
+    捕获后回退到慢路径, 而不是让 5xx 顶到用户面前。
+    """
+
+
 class GitlabUnavailableError(AppError):
     """GitLab 实例不可达或返回 5xx。"""
 

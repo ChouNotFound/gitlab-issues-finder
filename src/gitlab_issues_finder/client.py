@@ -11,6 +11,7 @@ import requests
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import (
     AuthError,
+    BadRequestError,
     GitlabTimeoutError,
     GitlabUnavailableError,
     NotFoundError,
@@ -52,7 +53,11 @@ class GitlabClient:
         except requests.exceptions.Timeout as e:
             raise GitlabTimeoutError(f"请求 GitLab 超时：{e}") from e
 
-        # 状态码映射
+        # 状态码映射。
+        # 401/403/404/429/5xx 各自专属; 剩余 4xx (400/422 等) 统一归为
+        # BadRequestError, 让上层 (例如 _mentioned_via_search 的 fallback)
+        # 决定回退到慢路径, 而不会让原始 body 透传到 _iter_pages 导致
+        # ``yield from dict`` 把字符串当 dict 解析。
         if resp.status_code == 401:
             raise AuthError("Token 认证失败：401 Unauthorized")
         if resp.status_code == 403:
@@ -66,6 +71,13 @@ class GitlabClient:
         if 500 <= resp.status_code < 600:
             raise GitlabUnavailableError(
                 f"GitLab 返回 HTTP {resp.status_code}：{resp.text[:200]}"
+            )
+        if 400 <= resp.status_code < 500:
+            # 其余 4xx (典型: /search 返 ``{"error": "scope ... not valid"}``)
+            # 不假设 body 是 list, 直接抛错由调用方决定下一步。
+            snippet = resp.text[:200]
+            raise BadRequestError(
+                f"GitLab 返回 HTTP {resp.status_code}：{snippet}"
             )
 
         # 2xx: 让 requests 自己抛非 2xx (不会到这里) 或返回 JSON

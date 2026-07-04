@@ -14,6 +14,7 @@ from gitlab_issues_finder.client import GitlabClient, build_client, safe_http_ge
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import (
     AuthError,
+    BadRequestError,
     GitlabTimeoutError,
     GitlabUnavailableError,
     NotFoundError,
@@ -114,6 +115,29 @@ class TestSafeHttpGetErrors:
         )
         with pytest.raises(GitlabUnavailableError):
             client.http_get("/user")
+
+    @responses.activate
+    def test_400_raises_bad_request(self, client):
+        """Bug 修复回归: /search 返 400 (例如 ``{"error": "scope ..."}``)
+        必须被映射为 BadRequestError, 而不是把 body 当 list 透传, 否则
+        ``_iter_pages`` 会 ``yield from dict`` 把字符串 key 当 item 抛出
+        ``AttributeError: 'str' object has no attribute 'get'``。"""
+        responses.add(
+            responses.GET, f"{API_BASE}/search",
+            json={"error": "scope does not have a valid value"}, status=400,
+        )
+        with pytest.raises(BadRequestError, match="scope does not have a valid value"):
+            client.http_get("/search", scope="notes", search="@x")
+
+    @responses.activate
+    def test_422_raises_bad_request(self, client):
+        """422 Unprocessable Entity 也走 BadRequestError。"""
+        responses.add(
+            responses.GET, f"{API_BASE}/search",
+            json={"error": ["search is too short"]}, status=422,
+        )
+        with pytest.raises(BadRequestError, match="422"):
+            client.http_get("/search")
 
     @responses.activate
     def test_502_raises_unavailable(self, client):
