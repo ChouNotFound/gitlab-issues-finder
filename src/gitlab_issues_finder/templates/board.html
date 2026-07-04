@@ -14,39 +14,7 @@
     {% include "_nav.html" %}
     <main class="shell-main">
 
-        {% if not username %}
-        <div class="home-wrap">
-            <div class="card home-card">
-                <h1 class="home-title">打开控制台</h1>
-                <p class="home-subtitle">输入你的 GitLab 用户名，进入个人工作台。</p>
-                <form class="home-form" method="get" action="/board">
-                    <label class="field-label" for="username">GitLab 用户名</label>
-                    <input type="text" id="username" name="username"
-                           placeholder="例如：alice" required autofocus
-                           list="recent-users" autocomplete="off" spellcheck="false">
-                    <datalist id="recent-users"></datalist>
-                    <button type="submit" class="btn btn-primary">进入控制台</button>
-                </form>
-                <p class="home-tip">控制台视图是<strong>只读</strong>的，拖拽仅本地保存（SQLite）。</p>
-            </div>
-        </div>
-        <script>
-            (async function () {
-                try {
-                    const r = await fetch('/api/recent-users');
-                    const data = await r.json();
-                    const dl = document.getElementById('recent-users');
-                    const frag = document.createDocumentFragment();
-                    for (const u of data.users || []) {
-                        const opt = document.createElement('option');
-                        opt.value = u;
-                        frag.appendChild(opt);
-                    }
-                    dl.appendChild(frag);
-                } catch (e) { /* silent */ }
-            })();
-        </script>
-        {% else %}
+        
 
         <div class="console-layout">
             <aside class="console-sidebar" aria-label="视图导航">
@@ -60,25 +28,25 @@
                     {% if since %}{% set view_query = view_query + '&since=' + since %}{% endif %}
                     {% if until %}{% set view_query = view_query + '&until=' + until %}{% endif %}
                     <a href="/board?username={{ username }}&view=summary{{ view_query }}"
-                       class="sidebar-link {% if view == 'summary' %}active{% endif %}">
+                       class="sidebar-link {% if view == 'summary' %}active{% endif %}" data-loading-text="加载看板…">
                         <span class="sidebar-link-icon">🏠</span>
                         <span class="sidebar-link-label">综述</span>
                         <span class="sidebar-link-count">{{ summary.total }}</span>
                     </a>
                     <a href="/board?username={{ username }}&view=all{{ view_query }}"
-                       class="sidebar-link {% if view == 'all' %}active{% endif %}">
+                       class="sidebar-link {% if view == 'all' %}active{% endif %}" data-loading-text="加载看板…">
                         <span class="sidebar-link-icon">📋</span>
                         <span class="sidebar-link-label">全部 Items</span>
                         <span class="sidebar-link-count">{{ summary.total }}</span>
                     </a>
                     <a href="/board?username={{ username }}&view=issues{{ view_query }}"
-                       class="sidebar-link {% if view == 'issues' %}active{% endif %}">
+                       class="sidebar-link {% if view == 'issues' %}active{% endif %}" data-loading-text="加载看板…">
                         <span class="sidebar-link-icon">🐛</span>
                         <span class="sidebar-link-label">Issues</span>
                         <span class="sidebar-link-count">{{ summary.issues }}</span>
                     </a>
                     <a href="/board?username={{ username }}&view=mrs{{ view_query }}"
-                       class="sidebar-link {% if view == 'mrs' %}active{% endif %}">
+                       class="sidebar-link {% if view == 'mrs' %}active{% endif %}" data-loading-text="加载看板…">
                         <span class="sidebar-link-icon">🔀</span>
                         <span class="sidebar-link-label">Merge Requests</span>
                         <span class="sidebar-link-count">{{ summary.mrs }}</span>
@@ -86,12 +54,12 @@
                     <div class="sidebar-divider"></div>
                     <div class="sidebar-section-label">按维度</div>
                     <a href="/board?username={{ username }}&view=relation{{ view_query }}"
-                       class="sidebar-link {% if view == 'relation' %}active{% endif %}">
+                       class="sidebar-link {% if view == 'relation' %}active{% endif %}" data-loading-text="加载看板…">
                         <span class="sidebar-link-icon">🧭</span>
                         <span class="sidebar-link-label">按"与我关系"</span>
                     </a>
                     <a href="/board?username={{ username }}&view=project{{ view_query }}"
-                       class="sidebar-link {% if view == 'project' %}active{% endif %}">
+                       class="sidebar-link {% if view == 'project' %}active{% endif %}" data-loading-text="加载看板…">
                         <span class="sidebar-link-icon">📁</span>
                         <span class="sidebar-link-label">按项目</span>
                         <span class="sidebar-link-count">{{ summary.projects }}</span>
@@ -99,7 +67,7 @@
                 </nav>
 
                 <div class="sidebar-footer">
-                    <form method="get" action="/board" class="sidebar-filter">
+                    <form method="get" action="/board" class="sidebar-filter" data-loading-text="正在应用过滤…">
                         <input type="hidden" name="username" value="{{ username }}">
                         <input type="hidden" name="view" value="{{ view }}">
                         {% if active_dim %}<input type="hidden" name="dim" value="{{ active_dim }}">{% endif %}
@@ -110,7 +78,7 @@
                                placeholder="如 bug,priority::high"
                                list="recent-q">
                         <datalist id="recent-q"></datalist>
-                        <button type="submit" class="btn btn-sm">应用</button>
+                        <button type="submit" class="btn btn-sm" data-loading-text="正在添加列…">应用</button>
                     </form>
                     <div class="sidebar-actions">
                         <a href="/search?username={{ username }}" class="btn btn-sm btn-ghost">查询视图</a>
@@ -141,7 +109,7 @@
                         <span class="cache-stamp">缓存 {{ fetched_at[:19].replace('T', ' ') }}</span>
                         {% endif %}
                         <a class="btn btn-sm btn-ghost"
-                           href="/board?username={{ username }}&view={{ view }}{% if active_dim %}&dim={{ active_dim }}{% endif %}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if since %}&since={{ since }}{% endif %}{% if until %}&until={{ until }}{% endif %}&refresh=1">刷新</a>
+                           href="/board?username={{ username }}&view={{ view }}{% if active_dim %}&dim={{ active_dim }}{% endif %}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if since %}&since={{ since }}{% endif %}{% if until %}&until={{ until }}{% endif %}&refresh=1" data-loading-text="正在从 GitLab 拉取最新数据…">刷新</a>
                     </div>
                     {% if view != 'summary' %}
                     <div class="console-tools">
@@ -193,7 +161,7 @@
                         <span class="stat-group-label">Issues</span>
                         {% for key, label, icon in ISSUE_STAT_KEYS %}
                         <a class="stat-pill stat-pill-{{ key }}"
-                           href="/board?username={{ username }}&view=issues&dim={{ key }}{{ view_query }}">
+                           href="/board?username={{ username }}&view=issues&dim={{ key }}{{ view_query }}" data-loading-text="加载看板…">
                             <span class="stat-pill-icon" aria-hidden="true">{{ icon }}</span>
                             <span class="stat-pill-label">{{ label }}</span>
                             <span class="stat-pill-count">{{ summary.by_relation_counts.issues[key] }}</span>
@@ -205,7 +173,7 @@
                         <span class="stat-group-label">Merge Requests</span>
                         {% for key, label, icon in MR_STAT_KEYS %}
                         <a class="stat-pill stat-pill-{{ key }}"
-                           href="/board?username={{ username }}&view=mrs&dim={{ key }}{{ view_query }}">
+                           href="/board?username={{ username }}&view=mrs&dim={{ key }}{{ view_query }}" data-loading-text="加载看板…">
                             <span class="stat-pill-icon" aria-hidden="true">{{ icon }}</span>
                             <span class="stat-pill-label">{{ label }}</span>
                             <span class="stat-pill-count">{{ summary.by_relation_counts.mrs[key] }}</span>
@@ -409,8 +377,6 @@
 
             </section>
         </div>
-
-        {% endif %}
 
     </main>
 </div>

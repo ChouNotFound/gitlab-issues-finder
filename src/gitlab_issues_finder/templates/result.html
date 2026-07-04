@@ -10,6 +10,16 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+<!-- Loading overlay -->
+<div class="loading-bar" id="loading-bar" aria-hidden="true"></div>
+<div class="loading-overlay" id="loading-overlay" role="status" aria-live="polite" aria-busy="false">
+    <div class="loading-panel">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <div class="loading-text">加载中…</div>
+    </div>
+</div>
+<script src="/static/loading.js" defer></script>
+
 <div class="shell">
     {% include "_nav.html" %}
     <main class="shell-main" style="padding: 24px 32px;">
@@ -154,8 +164,8 @@
             </section>
 
             <div style="margin-top: 32px; display: flex; gap: 12px; justify-content: center;">
-                <a href="/" class="btn">← 回到首页</a>
-                <a href="/board?username={{ username }}" class="btn btn-primary">打开看板 →</a>
+                <a href="/" class="btn" data-loading-text="回到首页…">← 回到首页</a>
+                <a href="/board?username={{ username }}" class="btn btn-primary" data-loading-text="正在打开 @{{ username }} 的看板…">打开看板 →</a>
             </div>
         </div>
     </main>

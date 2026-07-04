@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from urllib.parse import parse_qs, urlparse
 
@@ -325,6 +326,49 @@ class TestIndexRoute:
         assert 'name="username"' in resp.text
         # 行动文案 "打开看板"
         assert "查看看板" in resp.text
+
+    def test_index_renders_loading_overlay(self, client, tmp_db):
+        """首页应同时渲染 loading 遮罩与进度条 DOM 节点。"""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert 'id="loading-overlay"' in resp.text
+        assert 'id="loading-bar"' in resp.text
+        assert "/static/loading.js" in resp.text
+
+    def test_index_form_has_loading_text(self, client, tmp_db):
+        """首页 form 应带 data-loading-text 触发器。"""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert 'data-loading-text="正在打开看板…"' in resp.text
+
+    def test_recent_chips_carry_loading_text(self, client, tmp_db, monkeypatch):
+        """最近用户 chip 应带 data-loading-text（用户名拼到文案里）。"""
+        from gitlab_issues_finder import storage
+        db_path = os.environ["DB_PATH"]  # tmp_db 已经设过
+        storage.touch_user(db_path, "alice")
+        storage.touch_user(db_path, "bob")
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "正在打开 @alice 的看板…" in resp.text
+        assert "正在打开 @bob 的看板…" in resp.text
+
+    def test_loading_js_served(self, client):
+        """loading.js 应当作为静态文件被 FastAPI 提供。"""
+        resp = client.get("/static/loading.js")
+        assert resp.status_code == 200
+        assert "showLoading" in resp.text
+        assert "data-loading-text" in resp.text
+
+    def test_board_no_username_redirects_to_home(self, client, tmp_db):
+        """/board 不带 username 应 307 到 / (单一 home URL)。"""
+        resp = client.get("/board", follow_redirects=False)
+        assert resp.status_code == 307
+        assert resp.headers.get("location", "").endswith("/")
+        # 跟随重定向后能拿到 home 页
+        resp2 = client.get("/board", follow_redirects=True)
+        assert resp2.status_code == 200
+        assert 'name="username"' in resp2.text
+        assert "loading-overlay" in resp2.text
 
 
 class TestSearchRoute:
@@ -656,14 +700,18 @@ class TestStaticFiles:
 class TestBoardRoute:
     @responses.activate
     def test_board_empty_when_no_username(self, client, monkeypatch, tmp_db):
-        """无 username 时看板仍渲染用户名输入入口（不列 5 列）。"""
+        """无 username 时 /board 重定向到 / (单一 home URL)。"""
         monkeypatch.delenv("GITLAB_TOKEN", raising=False)
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
-        resp = client.get("/board")
-        assert resp.status_code == 200
-        assert 'name="username"' in resp.text
+        resp = client.get("/board", follow_redirects=False)
+        assert resp.status_code in (301, 302, 307)
+        assert resp.headers.get("location", "").endswith("/")
+        # 跟随重定向后拿到 home 页
+        resp2 = client.get("/board", follow_redirects=True)
+        assert resp2.status_code == 200
+        assert 'name="username"' in resp2.text
         # 无 username 不应渲染列 5 个默认
-        assert "需我审查" not in resp.text
+        assert "需我审查" not in resp2.text
 
     @responses.activate
     def test_board_keeps_reviewer_and_assignee_mrs(self, client, monkeypatch, tmp_db):

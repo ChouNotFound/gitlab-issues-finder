@@ -22,7 +22,7 @@
                 <div class="home-form">
                     <div>
                         <label class="field-label" for="username">GitLab 用户名</label>
-                        <form method="get" action="/board">
+                        <form method="get" action="/board" data-loading-text="正在打开看板…">
                             <div class="row-with-button">
                                 <input
                                     type="text"
@@ -46,7 +46,7 @@
                         <label class="field-label">最近</label>
                         <div class="recent-chips">
                             {% for u in recent_users %}
-                            <a class="recent-chip" href="/board?username={{ u }}">{{ u }}</a>
+                            <a class="recent-chip" href="/board?username={{ u }}" data-loading-text="正在打开 @{{ u }} 的看板…">{{ u }}</a>
                             {% endfor %}
                         </div>
                     </div>

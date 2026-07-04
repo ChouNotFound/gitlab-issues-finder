@@ -9,6 +9,16 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+<!-- Loading overlay -->
+<div class="loading-bar" id="loading-bar" aria-hidden="true"></div>
+<div class="loading-overlay" id="loading-overlay" role="status" aria-live="polite" aria-busy="false">
+    <div class="loading-panel">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <div class="loading-text">加载中…</div>
+    </div>
+</div>
+<script src="/static/loading.js" defer></script>
+
 <div class="shell">
     {% if active_tab is not none %}
     {% include "_nav.html" %}
@@ -45,7 +55,7 @@
             <h1 class="error-title">⚠ {{ title }}</h1>
             <div class="error-body">{{ message }}</div>
             <div style="margin-top: 16px;">
-                <a href="/" class="btn">← 回到首页</a>
+                <a href="/" class="btn" data-loading-text="回到首页…">← 回到首页</a>
             </div>
         </div>
     </main>

@@ -443,7 +443,10 @@ def _load_user_items(
 # ----- HTML 路由 -----
 @app.get("/", response_class=HTMLResponse, tags=["UI"])
 async def index(request: Request) -> HTMLResponse:
-    """首页：选择用户名（带 datalist 自动补全 + 最近使用）。"""
+    """首页：选择用户名（带 datalist 自动补全 + 最近使用）。
+
+    注：/board 不带 username 会被 307 重定向到这里，避免两套 home 视图。
+    """
     cfg = _try_cfg()
     recent: list[str] = []
     if cfg:
@@ -577,37 +580,11 @@ async def board(
       - project ：按 project_id 分组
     """
     username = username.strip()
-    dbp = _db_path()
     if not username:
-        return templates.TemplateResponse(
-            request,
-            "board.html",
-            {
-                "username": "",
-                "columns": [],
-                "items_by_col": {},
-                "overrides": {},
-                "all_items": [],
-                "items_by_rel": {},
-                "items_by_proj": {},
-                "summary": _empty_summary(),
-                "view": view,
-                "active_tab": "board",
-                "theme": "auto",
-                "filter_q": "",
-                "since": "",
-                "until": "",
-                "active_dim": "",
-                "active_dim_label": "",
-                "fetched_at": "",
-                "display_items": [],
-                "key_to_reasons": {},
-                "reason_details": {},
-                "project_info": {},
-                "ISSUE_STAT_KEYS": ISSUE_STAT_KEYS,
-                "MR_STAT_KEYS": MR_STAT_KEYS,
-            },
-        )
+        # 无 username 时统一走 /, 避免 /board 与 / 两套 home 视图。
+        # 307 (而非 302) 保留方法, 即便将来该路由支持 POST 也安全。
+        return RedirectResponse(url="/", status_code=307)
+    dbp = _db_path()
 
     # 验证 view 参数
     allowed_views = {"summary", "all", "issues", "mrs", "relation", "project"}
