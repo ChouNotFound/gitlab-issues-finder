@@ -17,6 +17,7 @@ from gitlab_issues_finder.queries import (
     REACTION_EMOJI_DEFAULT,
     ItemKind,
     Relation,
+    _iter_pages,
     dedupe,
     fetch_issue_low_threshold_items,
     fetch_issue_notes,
@@ -862,3 +863,32 @@ class TestFetchReacted:
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs["my_reaction_emoji"] == ["thumbsup"]
         assert "/merge_requests" in responses.calls[-1].request.url
+
+
+class TestIterPagesRunawayGuard:
+    """_iter_pages 必须有硬上限, 防止服务端的"最后一页恰好等于 page_size"
+    错误返回导致无限循环。"""
+
+    @responses.activate
+    def test_stops_after_max_pages_even_if_each_page_equals_page_size(self, gl, monkeypatch):
+        """每次都返回 page_size 条, 没有终止信号 -> 仍必须在 _MAX_PAGES 后停下。"""
+        from gitlab_issues_finder.queries import _MAX_PAGES
+
+        # 每次都返回满页; responses 默认按调用顺序 round-robin
+        full_page = [{"id": i, "iid": i} for i in range(1, 21)]
+        for _ in range(_MAX_PAGES + 5):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/issues",
+                json=full_page,
+                status=200,
+                match_querystring=False,
+            )
+
+        # monkeypatch 降低上限, 让测试跑得更快
+        monkeypatch.setattr("gitlab_issues_finder.queries._MAX_PAGES", 5)
+        collected = list(_iter_pages(gl, {"state": "opened"}, page_size=20, path="/issues"))
+        # 5 页 * 20 条 = 100 条
+        assert len(collected) == 100
+        # requests.calls 数应等于 _MAX_PAGES (5); 不再多
+        assert len(responses.calls) == 5

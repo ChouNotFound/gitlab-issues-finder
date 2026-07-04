@@ -14,6 +14,8 @@ from gitlab_issues_finder.errors import (
     AuthError,
     GitlabTimeoutError,
     GitlabUnavailableError,
+    NotFoundError,
+    RateLimitError,
 )
 
 
@@ -39,15 +41,43 @@ def safe_http_get(gl: gitlab.Gitlab, path: str, **query_data):
     """调用 gl.http_get 并将网络层异常映射为应用层异常。
 
     用于 queries.py 中所有主动发起的 HTTP 请求（如分页拉取 /issues）。
+
+    映射规则:
+      - 401 / 403  -> AuthError
+      - 404        -> NotFoundError (资源不存在)
+      - 429        -> RateLimitError
+      - 5xx        -> GitlabUnavailableError
+      - SSL / 连接 / 超时 -> 对应专项异常
+
+    注: ``obey_rate_limit=False`` + ``retry_transient_errors=False`` 让 429 / 5xx
+    立刻浮出, 而不是被 python-gitlab 默认的 max_retries=10 sleep+retry 吞掉。
     """
     try:
-        return gl.http_get(path, query_data=query_data)
+        # ``obey_rate_limit=False`` 阻止 python-gitlab 自带的 429 sleep+retry 循环
+        # (默认 max_retries=10, 一次 rate limit 可能阻塞数十秒), 让 429 立刻
+        # 浮上来交由 RateLimitError 处理。
+        # ``retry_transient_errors=False`` 同样避免 5xx 反复重试吞噬时间。
+        return gl.http_get(
+            path,
+            query_data=query_data,
+            obey_rate_limit=False,
+            retry_transient_errors=False,
+        )
     except gitlab.exceptions.GitlabAuthenticationError as e:
         raise AuthError(f"Token 认证失败：{e}") from e
     except gitlab.exceptions.GitlabError as e:
         code = getattr(e, "response_code", None)
         if code == 403:
             raise AuthError("Token 没有访问权限。请确认 scope 包含 read_api。") from e
+        if code == 404:
+            raise NotFoundError(f"资源不存在 (HTTP 404): {path}") from e
+        if code == 429:
+            # 注: python-gitlab 的 GitlabError 不暴露 response headers,
+            # 因此 Retry-After 无法透传。调用方可以再次刷新尝试 (受
+            # 应用层 rate_limit.py 控制频率)。
+            raise RateLimitError(
+                "GitLab 触发限流 (HTTP 429)。稍等片刻再试或调高 RATE_LIMIT_RPM。"
+            ) from e
         raise GitlabUnavailableError(f"GitLab 返回 HTTP {code or '?'}：{e}") from e
     except requests.exceptions.SSLError as e:
         raise GitlabUnavailableError(

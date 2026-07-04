@@ -153,3 +153,42 @@ class TestReorderColumnsStorage:
         # 'author' now has sort_index=0; others keep their original higher indices
         assert cols[0]["id"] == "author"
         assert cols[0]["sort_index"] == 0
+
+
+class TestSchemaIndexes:
+    """验证关键索引已建立 (list_recent_users 的性能依赖)。"""
+
+    def test_last_seen_index_exists(self, tmp_path: Path):
+        from gitlab_issues_finder.storage import _connect
+
+        dbp = tmp_path / "x.db"
+        storage.init_db(dbp)
+        with _connect(dbp) as conn:
+            indexes = {
+                r["name"]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            }
+        assert "idx_user_prefs_last_seen" in indexes
+
+    def test_stale_projects_uses_unixepoch(self, tmp_path: Path):
+        """stale_projects 应能正确筛选超过 max_age_seconds 的项目。"""
+        from gitlab_issues_finder.storage import _connect
+
+        dbp = tmp_path / "x.db"
+        storage.init_db(dbp)
+        # 插入: 一个已过期, 一个新鲜
+        with _connect(dbp) as conn:
+            conn.execute(
+                "INSERT INTO project_cache(project_id, name, path_with_namespace, fetched_at) "
+                "VALUES (1, 'old', 'grp/old', datetime('now', '-1 day'))"
+            )
+            conn.execute(
+                "INSERT INTO project_cache(project_id, name, path_with_namespace, fetched_at) "
+                "VALUES (2, 'new', 'grp/new', datetime('now'))"
+            )
+            conn.commit()
+        # 1 小时阈值 -> 老的过期, 新的不
+        stale = storage.stale_projects(dbp, max_age_seconds=3600)
+        assert stale == [1]

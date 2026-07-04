@@ -749,29 +749,42 @@ def _empty_summary() -> dict:
     }
 
 
-def _count_by_relation(items, key_to_reasons, dimensions):
-    """按维度独立计数；不同维度之间不互相去重。"""
-    counts = {d: 0 for d in dimensions}
-    for it in items:
-        reasons = set(key_to_reasons.get(it.key, []))
-        for d in dimensions:
-            if d in reasons:
-                counts[d] += 1
-    return counts
-
-
 def _compute_summary(
     all_items: list[IssueRef],
     key_to_reasons: dict[tuple[str, int, int], list[str]],
     items_by_proj: dict[int, list[IssueRef]],
 ) -> dict:
+    """单次遍历计算综述所需的全部聚合。
+
+    之前 4 次独立 list 推导 + max 扫描 5 遍 O(N)；现在合并为一次 O(N) 循环。
+    """
     if not all_items:
         return _empty_summary()
-    issues = [it for it in all_items if it.type == "issue"]
-    mrs = [it for it in all_items if it.type == "merge_request"]
-    by_rel = {rel: 0 for rel in ("reviewer", "assignee", "mention", "author", "other")}
+    issue_dims = [k for k, _, _ in ISSUE_STAT_KEYS]
+    mr_dims = [k for k, _, _ in MR_STAT_KEYS]
+    by_rel: dict[str, int] = {rel: 0 for rel in ("reviewer", "assignee", "mention", "author", "other")}
+    by_relation_counts: dict[str, dict[str, int]] = {
+        "issues": {d: 0 for d in issue_dims},
+        "mrs": {d: 0 for d in mr_dims},
+    }
+    total_issues = 0
+    total_mrs = 0
+    most_recent: IssueRef = all_items[0]
     for it in all_items:
+        # 类型分桶
+        if it.type == "issue":
+            total_issues += 1
+            type_dims = issue_dims
+        else:
+            total_mrs += 1
+            type_dims = mr_dims
+        # 关系统计
         rs = key_to_reasons.get(it.key, [])
+        counts = by_relation_counts["issues" if it.type == "issue" else "mrs"]
+        for d in type_dims:
+            if d in rs:
+                counts[d] += 1
+        # 默认分桶
         placed = False
         for rel in _relation_priority_for_type(it.type):
             if rel in rs:
@@ -780,17 +793,22 @@ def _compute_summary(
                 break
         if not placed:
             by_rel["other"] += 1
+        # 最近更新
+        if it.updated_at > most_recent.updated_at:
+            most_recent = it
     by_proj = sorted(
         ({"project_id": pid, "count": len(lst)} for pid, lst in items_by_proj.items()),
         key=lambda d: d["count"],
         reverse=True,
     )[:10]
-    most_recent = max(all_items, key=lambda it: it.updated_at)
-    issue_dims = [k for k, _, _ in ISSUE_STAT_KEYS]
-    mr_dims = [k for k, _, _ in MR_STAT_KEYS]
-    by_relation_counts = {
-        "issues": _count_by_relation(issues, key_to_reasons, issue_dims),
-        "mrs": _count_by_relation(mrs, key_to_reasons, mr_dims),
+    return {
+        "total": len(all_items),
+        "issues": total_issues,
+        "mrs": total_mrs,
+        "by_relation": by_rel,
+        "by_relation_counts": by_relation_counts,
+        "by_project": by_proj,
+        "most_recent": most_recent,
     }
     return {
         "total": len(all_items),

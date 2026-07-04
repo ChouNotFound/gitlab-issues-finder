@@ -24,3 +24,11 @@ class GitlabUnavailableError(AppError):
 
 class GitlabTimeoutError(AppError):
     """请求 GitLab 超时。"""
+
+class RateLimitError(GitlabUnavailableError):
+    """GitLab 实例触发 rate limit (HTTP 429)。"""
+
+
+
+class NotFoundError(AppError):
+    """资源不存在 (HTTP 404)，如 project_id 不存在或被删除。"""

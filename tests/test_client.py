@@ -18,6 +18,8 @@ from gitlab_issues_finder.errors import (
     AuthError,
     GitlabTimeoutError,
     GitlabUnavailableError,
+    NotFoundError,
+    RateLimitError,
 )
 
 API_BASE = "https://gitlab.test/api/v4"
@@ -92,6 +94,36 @@ class TestSafeHttpGetErrors:
         )
         with pytest.raises(GitlabUnavailableError):
             safe_http_get(gl, "/user")
+
+    @responses.activate
+    def test_404_raises_not_found(self, gl):
+        """404 单独映射为 NotFoundError, 区别于通用 GitlabUnavailableError。"""
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/9999",
+            json={"message": "404 Project Not Found"},
+            status=404,
+        )
+        with pytest.raises(NotFoundError, match="404"):
+            safe_http_get(gl, "/projects/9999")
+
+    @responses.activate
+    def test_429_raises_rate_limit(self, gl):
+        """429 映射为 RateLimitError, 不被 python-gitlab 内部 sleep+retry 吞掉。
+
+        这里特意用 ``assert_all_requests_are_fired=False`` 因为我们只注册了
+        一次响应, 期望 429 立刻抛出 (而非 10 次重试)。
+        """
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/issues",
+            json={"message": "429 Too Many Requests"},
+            status=429,
+        )
+        with pytest.raises(RateLimitError, match="限流"):
+            safe_http_get(gl, "/issues")
+        # 验证没有触发重试: 一次响应就抛错
+        assert len(responses.calls) == 1
 
     @responses.activate
     def test_timeout_raises_timeout(self, gl):

@@ -79,6 +79,11 @@ _ID_RELATION_MAP: dict[Relation, str] = {
 }
 
 
+# 防御性上限：单次分页拉取的页数。100 页 * 100 条 = 10k 条结果，
+# 远超个人看板的合理规模。触发后立即停止并信任调用方处理 (通常是缓存截断)。
+_MAX_PAGES = 100
+
+
 def _iter_pages(
     gl: gitlab.Gitlab,
     params: dict,
@@ -89,9 +94,12 @@ def _iter_pages(
 
     GitLab 默认 per_page=20，最多 100。每次拉满 page_size，少于 page_size 即终止。
     path 默认 "/issues"，传 "/merge_requests" 等即可复用同一分页逻辑。
+
+    防御: 当 GitLab 不正确地返回等于 page_size 的最后一页 (罕见的客户端 / 服务端
+    bug 或 504 重试场景) 时, 硬上限 ``_MAX_PAGES`` 防止无限循环 + 内存爆炸。
     """
     page = 1
-    while True:
+    while page <= _MAX_PAGES:
         chunk = safe_http_get(
             gl,
             path,
