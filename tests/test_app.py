@@ -27,7 +27,7 @@ class TestStatRowAndDimensions:
 
     @responses.activate
     def test_summary_has_by_relation_counts(self, client, monkeypatch, tmp_db):
-        """summary 应包含 by_relation_counts 字段，且覆盖 5 issues + 3 mrs 维度。"""
+        """summary 应包含 by_relation_counts 字段，且覆盖 3 issues + 2 mrs 维度。"""
         from gitlab_issues_finder import app as app_module
 
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
@@ -42,19 +42,17 @@ class TestStatRowAndDimensions:
         monkeypatch.setattr(
             app_module, "fetch_items_by_user_id", lambda *a, **kw: []
         )
-        # 3 issue relations + 1 MR relation
+        # 3 issue relations + 2 MR relations
         for _ in range(3):
             responses.add(
                 responses.GET, f"{API_BASE}/issues", json=[], status=200,
                 match_querystring=False,
             )
-        for _ in range(1):
+        for _ in range(2):
             responses.add(
                 responses.GET, f"{API_BASE}/merge_requests", json=[],
                 status=200, match_querystring=False,
             )
-        # subscribed + reacted (issue + mr) - autouse turns these off
-        # but our app code only calls them; verify the new pipeline ran
         r = client.get("/board?username=alice")
         assert r.status_code == 200
         # _compute_summary fields are passed to template only in non-empty case;
@@ -66,7 +64,6 @@ class TestStatRowAndDimensions:
         """_compute_summary 应在 all_items 非空时填 by_relation_counts.issues/mrs 全维度。"""
         from gitlab_issues_finder.app import _compute_summary
         from gitlab_issues_finder.models import IssueRef
-        from gitlab_issues_finder.queries import EXTRA_REACTION, EXTRA_SUBSCRIBED
 
         def make_ref(pid, iid, reasons, kind="issue"):
             ref = IssueRef.from_api(
@@ -84,9 +81,9 @@ class TestStatRowAndDimensions:
             )
             return ref, {ref.key: reasons}
 
-        iss, kr1 = make_ref(1, 1, ["assignee", EXTRA_SUBSCRIBED], kind="issue")
+        iss, kr1 = make_ref(1, 1, ["assignee"], kind="issue")
         iss2, kr2 = make_ref(1, 2, ["mention"], kind="issue")
-        mr, kr3 = make_ref(2, 1, ["assignee", EXTRA_REACTION], kind="merge_request")
+        mr, kr3 = make_ref(2, 1, ["reviewer", "assignee"], kind="merge_request")
         all_items = [iss, iss2, mr]
         key_to_reasons = {}
         for d in (kr1, kr2, kr3):
@@ -98,35 +95,188 @@ class TestStatRowAndDimensions:
         assert counts["issues"]["assignee"] == 1
         assert counts["issues"]["mention"] == 1
         assert counts["issues"]["author"] == 0
-        assert counts["issues"][EXTRA_SUBSCRIBED] == 1
-        assert counts["issues"][EXTRA_REACTION] == 0
         # mr 维度
+        assert counts["mrs"]["reviewer"] == 1
         assert counts["mrs"]["assignee"] == 1
-        assert counts["mrs"][EXTRA_REACTION] == 1
-        assert counts["mrs"][EXTRA_SUBSCRIBED] == 0
+
+    def test_relation_counts_keep_overlapping_issue_dimensions(self):
+        """同一 issue 命中多个维度时，各维度独立计数，总数只算一次。"""
+        from gitlab_issues_finder.app import _compute_summary
+        from gitlab_issues_finder.models import IssueRef
+
+        issue = IssueRef.from_api(
+            {
+                "project_id": 1,
+                "iid": 7,
+                "title": "Overlap",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "u",
+                "updated_at": "2026-07-01T00:00:00Z",
+            },
+            type="issue",
+        )
+        summary = _compute_summary(
+            [issue],
+            {issue.key: ["assignee", "mention", "author"]},
+            {1: [issue]},
+        )
+        counts = summary["by_relation_counts"]["issues"]
+
+        assert summary["total"] == 1
+        assert summary["issues"] == 1
+        assert counts["assignee"] == 1
+        assert counts["mention"] == 1
+        assert counts["author"] == 1
+
+    def test_load_user_items_counts_ten_assigned_issues_with_overlap(self, monkeypatch):
+        """10 个 assignee issue 都应保留；与 mention 重叠不影响 assignee 计数。"""
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.models import IssueRef
+        from gitlab_issues_finder.queries import ItemKind, Relation
+
+        refs = [
+            IssueRef.from_api(
+                {
+                    "project_id": 1,
+                    "iid": iid,
+                    "title": f"Issue {iid}",
+                    "state": "opened",
+                    "labels": [],
+                    "assignee": {"username": "alice"},
+                    "web_url": f"https://gl/{iid}",
+                    "updated_at": "2026-07-01T00:00:00Z",
+                },
+                type="issue",
+            )
+            for iid in range(1, 11)
+        ]
+
+        def fake_fetch_items(gl, username, relation, kind, page_size=100):
+            if kind is ItemKind.ISSUE and relation is Relation.ASSIGNEE:
+                return list(refs)
+            if kind is ItemKind.ISSUE and relation is Relation.MENTION:
+                return list(refs[:3])
+            if kind is ItemKind.ISSUE and relation is Relation.AUTHOR:
+                return []
+            return []
+
+        monkeypatch.setattr(app_module, "fetch_items", fake_fetch_items)
+        monkeypatch.setattr(app_module, "fetch_issue_low_threshold_items", lambda *a, **kw: (refs[3:5], refs[4:6]))
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+
+        loaded = app_module._load_user_items(object(), "alice", 100, force_refresh=True)
+        summary = app_module._compute_summary(
+            loaded["all_items"],
+            loaded["key_to_reasons"],
+            {1: loaded["all_items"]},
+        )
+        counts = summary["by_relation_counts"]["issues"]
+
+        assert summary["total"] == 10
+        assert summary["issues"] == 10
+        assert counts["assignee"] == 10
+        assert counts["mention"] == 5
+
+    def test_load_user_items_excludes_reply_only_issues(self, monkeypatch):
+        """本人回复过但没有显式 @ 的 issue 不应进入 @我或总列表。"""
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.models import IssueRef
+
+        reply_only = IssueRef.from_api(
+            {
+                "project_id": 1,
+                "iid": 99,
+                "title": "Reply Only",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gl/reply-only",
+                "updated_at": "2026-07-01T00:00:00Z",
+            },
+            type="issue",
+        )
+
+        monkeypatch.setattr(app_module, "fetch_items", lambda *a, **kw: [])
+        monkeypatch.setattr(
+            app_module,
+            "fetch_issue_low_threshold_items",
+            lambda *a, **kw: ([], [reply_only]),
+        )
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+
+        loaded = app_module._load_user_items(object(), "alice", 100, force_refresh=True)
+
+        assert loaded["all_items"] == []
+        assert reply_only.key not in loaded["key_to_reasons"]
+        assert reply_only.key not in loaded["key_to_reason_details"]
+
+    def test_load_user_items_dedupes_within_assignee_dimension(self, monkeypatch):
+        """同一 item 通过 assignee_username 和 assignee_id 返回时，assignee 只计一次。"""
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.models import IssueRef
+        from gitlab_issues_finder.queries import ItemKind, Relation
+
+        issue = IssueRef.from_api(
+            {
+                "project_id": 1,
+                "iid": 1,
+                "title": "Assigned twice",
+                "state": "opened",
+                "labels": [],
+                "assignee": {"username": "alice"},
+                "web_url": "https://gl/1",
+                "updated_at": "2026-07-01T00:00:00Z",
+            },
+            type="issue",
+        )
+
+        def fake_fetch_items(gl, username, relation, kind, page_size=100):
+            if kind is ItemKind.ISSUE and relation is Relation.ASSIGNEE:
+                return [issue]
+            return []
+
+        def fake_fetch_by_id(gl, user_ids, relation, kind, page_size=100):
+            if kind is ItemKind.ISSUE and relation is Relation.ASSIGNEE:
+                return [issue]
+            return []
+
+        monkeypatch.setattr(app_module, "fetch_items", fake_fetch_items)
+        monkeypatch.setattr(app_module, "fetch_issue_low_threshold_items", lambda *a, **kw: ([], []))
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [42])
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", fake_fetch_by_id)
+
+        loaded = app_module._load_user_items(object(), "alice", 100, force_refresh=True)
+        summary = app_module._compute_summary(
+            loaded["all_items"],
+            loaded["key_to_reasons"],
+            {1: loaded["all_items"]},
+        )
+
+        assert summary["total"] == 1
+        assert summary["by_relation_counts"]["issues"]["assignee"] == 1
 
     def test_empty_summary_has_zeroed_by_relation_counts(self):
         from gitlab_issues_finder.app import _empty_summary
-        from gitlab_issues_finder.queries import EXTRA_REACTION, EXTRA_SUBSCRIBED
 
         s = _empty_summary()
         assert "by_relation_counts" in s
         assert s["by_relation_counts"]["issues"]["assignee"] == 0
-        assert s["by_relation_counts"]["issues"][EXTRA_SUBSCRIBED] == 0
-        assert s["by_relation_counts"]["issues"][EXTRA_REACTION] == 0
+        assert s["by_relation_counts"]["issues"]["mention"] == 0
+        assert s["by_relation_counts"]["issues"]["author"] == 0
+        assert s["by_relation_counts"]["mrs"]["reviewer"] == 0
         assert s["by_relation_counts"]["mrs"]["assignee"] == 0
-        assert s["by_relation_counts"]["mrs"][EXTRA_SUBSCRIBED] == 0
-        assert s["by_relation_counts"]["mrs"][EXTRA_REACTION] == 0
 
     @responses.activate
     def test_stat_row_renders_in_summary_view(self, client, monkeypatch, tmp_db):
-        """summary 视图应在顶部渲染 stat-row，包含 5 issue + 3 mr 共 8 个 stat-pill。"""
+        """summary 视图应在顶部渲染 stat-row，包含 3 issue + 2 mr 共 5 个 stat-pill。"""
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
-        # Make 3 issue + 1 MR + subscribed + reacted work
         from gitlab_issues_finder import app as app_module
         monkeypatch.setattr(app_module, "resolve_user_ids", lambda gl, username, **kw: [])
-        # Inject a non-empty subscribed/reacted to exercise the stat row
         from gitlab_issues_finder.models import IssueRef
         sample = [
             IssueRef.from_api(
@@ -138,38 +288,32 @@ class TestStatRowAndDimensions:
                 type="issue",
             )
         ]
-        monkeypatch.setattr(app_module, "fetch_subscribed", lambda *a, **kw: list(sample))
-        monkeypatch.setattr(app_module, "fetch_reacted", lambda *a, **kw: list(sample))
+
+        def fake_fetch_items(gl, username, relation, kind, page_size=100):
+            return list(sample) if kind.value == "issue" and relation.value == "assignee_username" else []
+
+        monkeypatch.setattr(app_module, "fetch_items", fake_fetch_items)
         monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
 
-        for _ in range(3):
-            responses.add(
-                responses.GET, f"{API_BASE}/issues", json=[], status=200,
-                match_querystring=False,
-            )
-        for _ in range(1):
-            responses.add(
-                responses.GET, f"{API_BASE}/merge_requests", json=[],
-                status=200, match_querystring=False,
-            )
         r = client.get("/board?username=alice&view=summary")
         assert r.status_code == 200
         assert "stat-row" in r.text
-        # stat-pill rendered 5 + 3 = 8 times
-        assert r.text.count("stat-pill stat-pill-") == 8
+        # stat-pill rendered 3 + 2 = 5 times
+        assert r.text.count("stat-pill stat-pill-") == 5
         # Issue / MR group labels
         assert "Issues" in r.text
         assert "Merge Requests" in r.text
 
     def test_stat_keys_constants_shape(self):
         from gitlab_issues_finder.app import ISSUE_STAT_KEYS, MR_STAT_KEYS
-        # 5 issue, 3 mr
-        assert len(ISSUE_STAT_KEYS) == 5
-        assert len(MR_STAT_KEYS) == 3
+        # 3 issue, 2 mr
+        assert len(ISSUE_STAT_KEYS) == 3
+        assert len(MR_STAT_KEYS) == 2
         # keys are the reason strings
         for k, _label, _icon in ISSUE_STAT_KEYS:
             assert isinstance(k, str)
-        assert [k for k, _, _ in MR_STAT_KEYS] == ["assignee", "subscribed", "reaction"]
+        assert [k for k, _, _ in ISSUE_STAT_KEYS] == ["assignee", "mention", "author"]
+        assert [k for k, _, _ in MR_STAT_KEYS] == ["reviewer", "assignee"]
 
 
 class TestIndexRoute:
@@ -260,7 +404,7 @@ class TestSearchRoute:
         assert "未找到" in resp.text
 
     @responses.activate
-    def test_search_includes_reply_only_issue_as_other(self, client, monkeypatch, tmp_db):
+    def test_search_excludes_reply_only_issue(self, client, monkeypatch, tmp_db):
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         from gitlab_issues_finder import app as app_module
@@ -289,18 +433,19 @@ class TestSearchRoute:
                 status=200,
                 match_querystring=False,
             )
-        responses.add(
-            responses.GET,
-            f"{API_BASE}/merge_requests",
-            json=[],
-            status=200,
-            match_querystring=False,
-        )
+        for _ in range(2):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
 
         resp = client.post("/search", data={"username": "alice"})
         assert resp.status_code == 200
-        assert "Reply Only Issue" in resp.text
-        assert "reason-comment" not in resp.text
+        assert "Reply Only Issue" not in resp.text
+        assert "source-reply" not in resp.text
 
     @responses.activate
     def test_search_includes_low_threshold_mention_issue(self, client, monkeypatch, tmp_db):
@@ -336,22 +481,24 @@ class TestSearchRoute:
                 status=200,
                 match_querystring=False,
             )
-        responses.add(
-            responses.GET,
-            f"{API_BASE}/merge_requests",
-            json=[],
-            status=200,
-            match_querystring=False,
-        )
+        for _ in range(2):
+            responses.add(
+                responses.GET,
+                f"{API_BASE}/merge_requests",
+                json=[],
+                status=200,
+                match_querystring=False,
+            )
 
         resp = client.post("/search", data={"username": "alice"})
         assert resp.status_code == 200
         assert "Mentioned In Notes" in resp.text
         assert "reason-mention" in resp.text
+        assert "source-literal_mention" in resp.text
 
     @responses.activate
     def test_search_minimal_endpoints_when_no_labels(self, client, monkeypatch, tmp_db):
-        """不传 labels 时只触发 3 个 issue 维度 + 1 个 MR 维度；labels 维度不触发。"""
+        """不传 labels 时只触发 3 个 issue 维度 + 2 个 MR 维度；labels 维度不触发。"""
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
         for _ in range(3):
@@ -362,7 +509,7 @@ class TestSearchRoute:
                 status=200,
                 match_querystring=False,
             )
-        for _ in range(1):
+        for _ in range(2):
             responses.add(
                 responses.GET,
                 f"{API_BASE}/merge_requests",
@@ -376,7 +523,7 @@ class TestSearchRoute:
         issue_urls = [u for u in urls if u.path == "/api/v4/issues"]
         mr_urls = [u for u in urls if u.path == "/api/v4/merge_requests"]
         assert len(issue_urls) >= 3
-        assert len(mr_urls) >= 1
+        assert len(mr_urls) >= 2
         for u in urls:
             assert "labels=" not in u.query, f"labels query fired: {u.query}"
 
@@ -519,11 +666,23 @@ class TestBoardRoute:
         assert "需我审查" not in resp.text
 
     @responses.activate
-    def test_board_only_keeps_assignee_mrs(self, client, monkeypatch, tmp_db):
-        """MR 仅 assignee 命中时才进入结果，其它 relation-only MR 不应出现。"""
+    def test_board_keeps_reviewer_and_assignee_mrs(self, client, monkeypatch, tmp_db):
+        """MR reviewer / assignee 命中时进入结果，其它 relation-only MR 不应出现。"""
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
 
+        reviewer_mr = [
+            {
+                "project_id": 2,
+                "iid": 21,
+                "title": "Reviewer MR",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gl/proj2/-/merge_requests/21",
+                "updated_at": "2026-07-02T11:00:00Z",
+            }
+        ]
         assignee_mr = [
             {
                 "project_id": 2,
@@ -545,20 +704,27 @@ class TestBoardRoute:
                 status=200,
                 match_querystring=False,
             )
-        for _ in range(2):
-            responses.add(
-                responses.GET,
-                f"{API_BASE}/merge_requests",
-                json=assignee_mr,
-                status=200,
-                match_querystring=False,
-            )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/merge_requests",
+            json=reviewer_mr,
+            status=200,
+            match_querystring=False,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/merge_requests",
+            json=assignee_mr,
+            status=200,
+            match_querystring=False,
+        )
 
         # 默认综述视图
         resp = client.get("/board?username=alice")
         assert resp.status_code == 200
+        assert "Reviewer MR" in resp.text
         assert "Assignee MR" in resp.text
-        for t in ["Reviewer MR", "Mention MR", "Author MR"]:
+        for t in ["Mention MR", "Author MR"]:
             assert t not in resp.text, f"unexpected MR (summary): {t}"
         assert "总 Items" in resp.text
         assert "涉及项目" in resp.text
@@ -570,12 +736,13 @@ class TestBoardRoute:
         assert "dragstart" in resp.text
         for rel in ["需我审查", "需我动", "@我的", "我创建的", "其他参与"]:
             assert rel in resp.text, f"missing column: {rel}"
+        assert "Reviewer MR" in resp.text
         assert "Assignee MR" in resp.text
-        for t in ["Reviewer MR", "Mention MR", "Author MR"]:
+        for t in ["Mention MR", "Author MR"]:
             assert t not in resp.text, f"unexpected MR (relation view): {t}"
 
-    def test_board_calls_4_mr_queries(self, client, monkeypatch, tmp_db):
-        """username 非空时应触发 3 issue + 1 MR = 4 次 fetch_items 调用。"""
+    def test_board_calls_5_relation_queries(self, client, monkeypatch, tmp_db):
+        """username 非空时应触发 3 issue + 2 MR = 5 次 fetch_items 调用。"""
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
 
@@ -591,9 +758,9 @@ class TestBoardRoute:
 
         resp = client.get("/board?username=alice")
         assert resp.status_code == 200
-        assert calls["count"] == 4
+        assert calls["count"] == 5
 
-    def test_board_view_switch_reuses_short_ttl_cache(self, client, monkeypatch, tmp_db):
+    def test_board_view_switch_reuses_cache(self, client, monkeypatch, tmp_db):
         """同一用户短时间切换视图时不应重复拉 GitLab。"""
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
@@ -621,8 +788,184 @@ class TestBoardRoute:
 
         assert r1.status_code == 200
         assert r2.status_code == 200
-        assert counters["fetch_items"] == 4
+        assert counters["fetch_items"] == 5
         assert counters["low_threshold"] == 1
+
+    def test_board_dim_filters_issue_and_mr_lists(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.models import IssueRef
+        from gitlab_issues_finder.queries import ItemKind, Relation
+
+        def ref(kind: str, iid: int, title: str) -> IssueRef:
+            return IssueRef.from_api(
+                {
+                    "project_id": 1,
+                    "iid": iid,
+                    "title": title,
+                    "state": "opened",
+                    "labels": [],
+                    "assignee": None,
+                    "web_url": f"https://gl/{kind}/{iid}",
+                    "updated_at": "2026-07-01T00:00:00Z",
+                },
+                type=kind,
+            )
+
+        assigned = ref("issue", 1, "Assigned Only")
+        mentioned = ref("issue", 2, "Mentioned Only")
+        overlap = ref("issue", 3, "Assigned And Mentioned")
+        authored = ref("issue", 4, "Authored Only")
+        reviewer_mr = ref("merge_request", 5, "Reviewer MR")
+        assignee_mr = ref("merge_request", 6, "Assignee MR")
+
+        def fake_fetch_items(gl, username, relation, kind, page_size=100):
+            if kind is ItemKind.ISSUE and relation is Relation.ASSIGNEE:
+                return [assigned, overlap]
+            if kind is ItemKind.ISSUE and relation is Relation.MENTION:
+                return [mentioned, overlap]
+            if kind is ItemKind.ISSUE and relation is Relation.AUTHOR:
+                return [authored]
+            if kind is ItemKind.MERGE_REQUEST and relation is Relation.REVIEWER:
+                return [reviewer_mr]
+            if kind is ItemKind.MERGE_REQUEST and relation is Relation.ASSIGNEE:
+                return [assignee_mr]
+            return []
+
+        monkeypatch.setattr(app_module, "fetch_items", fake_fetch_items)
+        monkeypatch.setattr(app_module, "fetch_issue_low_threshold_items", lambda *a, **kw: ([], []))
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+
+        r_assignee = client.get("/board?username=alice&view=issues&dim=assignee")
+        assert r_assignee.status_code == 200
+        assert "Assigned Only" in r_assignee.text
+        assert "Assigned And Mentioned" in r_assignee.text
+        assert "Mentioned Only" not in r_assignee.text
+        assert "Authored Only" not in r_assignee.text
+
+        r_mention = client.get("/board?username=alice&view=issues&dim=mention")
+        assert r_mention.status_code == 200
+        assert "Mentioned Only" in r_mention.text
+        assert "Assigned And Mentioned" in r_mention.text
+        assert "Assigned Only" not in r_mention.text
+        assert "Authored Only" not in r_mention.text
+        assert "source-mention_api" in r_mention.text
+
+        r_reviewer = client.get("/board?username=alice&view=mrs&dim=reviewer")
+        assert r_reviewer.status_code == 200
+        assert "Reviewer MR" in r_reviewer.text
+        assert "Assignee MR" not in r_reviewer.text
+
+    def test_board_mention_dim_excludes_reply_only_issue(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.models import IssueRef
+
+        reply_only = IssueRef.from_api(
+            {
+                "project_id": 1,
+                "iid": 77,
+                "title": "Reply Only Board Issue",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gl/reply-only-board",
+                "updated_at": "2026-07-01T00:00:00Z",
+            },
+            type="issue",
+        )
+
+        monkeypatch.setattr(app_module, "fetch_items", lambda *a, **kw: [])
+        monkeypatch.setattr(
+            app_module,
+            "fetch_issue_low_threshold_items",
+            lambda *a, **kw: ([], [reply_only]),
+        )
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+
+        r = client.get("/board?username=alice&view=issues&dim=mention")
+
+        assert r.status_code == 200
+        assert "Reply Only Board Issue" not in r.text
+        assert "source-reply" not in r.text
+
+    def test_summary_stat_links_keep_filters_and_dim(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        from gitlab_issues_finder import app as app_module
+
+        monkeypatch.setattr(app_module, "fetch_items", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_issue_low_threshold_items", lambda *a, **kw: ([], []))
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_labeled", lambda *a, **kw: [])
+
+        r = client.get(
+            "/board?username=alice&view=summary&q=bug&since=2026-01-01&until=2026-12-31"
+        )
+
+        assert r.status_code == 200
+        assert "view=issues&dim=assignee&amp;q=bug&amp;since=2026-01-01&amp;until=2026-12-31" in r.text
+        assert "view=issues&dim=mention&amp;q=bug&amp;since=2026-01-01&amp;until=2026-12-31" in r.text
+        assert "view=mrs&dim=reviewer&amp;q=bug&amp;since=2026-01-01&amp;until=2026-12-31" in r.text
+
+    def test_board_refresh_param_forces_reload(self, client, monkeypatch, tmp_db):
+        """未带 refresh 时复用缓存；refresh=1 时重新拉取。"""
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        from gitlab_issues_finder import app as app_module
+
+        counters = {"fetch_items": 0}
+
+        def fake_fetch_items(*args, **kwargs):
+            counters["fetch_items"] += 1
+            return []
+
+        monkeypatch.setattr(app_module, "fetch_items", fake_fetch_items)
+        monkeypatch.setattr(app_module, "fetch_issue_low_threshold_items", lambda *a, **kw: ([], []))
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_subscribed", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_reacted", lambda *a, **kw: [])
+
+        r1 = client.get("/board?username=alice&view=summary")
+        r2 = client.get("/board?username=alice&view=summary")
+        r3 = client.get("/board?username=alice&view=summary&refresh=1")
+
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert r3.status_code == 200
+        assert counters["fetch_items"] == 10
+        assert "refresh=1" in r3.text
+        assert "缓存 " in r3.text
+
+    def test_load_user_items_fetches_reviewer_id_mrs(self, monkeypatch):
+        """username 解析为 user_id 后，应补齐 MR reviewer_id 查询。"""
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.queries import ItemKind, Relation
+
+        calls: list[tuple[Relation, ItemKind]] = []
+
+        monkeypatch.setattr(app_module, "fetch_items", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_issue_low_threshold_items", lambda *a, **kw: ([], []))
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [42])
+        monkeypatch.setattr(app_module, "fetch_subscribed", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_reacted", lambda *a, **kw: [])
+
+        def fake_fetch_by_id(gl, user_ids, relation, kind, page_size=100):
+            calls.append((relation, kind))
+            return []
+
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", fake_fetch_by_id)
+
+        app_module._load_user_items(object(), "alice", 100, force_refresh=True)
+
+        assert (Relation.REVIEWER, ItemKind.MERGE_REQUEST) in calls
+        assert (Relation.ASSIGNEE, ItemKind.MERGE_REQUEST) in calls
 
 
 class TestBoardApi:
@@ -814,7 +1157,7 @@ class TestExportEndpoints:
     def test_export_csv(self, client, monkeypatch, tmp_db):
         monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
         monkeypatch.setenv("GITLAB_TOKEN", "x")
-        # 3 issue + 4 MR endpoints (no labels in query)
+        # 3 issue + 2 MR endpoints (no labels in query)
         for _ in range(3):
             responses.add(
                 responses.GET,
@@ -1279,7 +1622,7 @@ class TestPreviewEndpoint:
         assert data["item_key"] == "issue-1-7"
         assert len(data["available_columns"]) == 5
 
-    def test_preview_merge_request_non_assignee_goes_other(self, client, tmp_db):
+    def test_preview_merge_request_reviewer_goes_reviewer(self, client, tmp_db):
         r = client.post(
             "/api/preview",
             json={
@@ -1289,7 +1632,7 @@ class TestPreviewEndpoint:
             },
         )
         assert r.status_code == 200
-        assert r.json()["default_column"] == "other"
+        assert r.json()["default_column"] == "reviewer"
 
     def test_preview_other_when_no_specific_match(self, client, tmp_db):
         r = client.post(
@@ -1519,6 +1862,7 @@ class TestItemsEndpoint:
         assert r.status_code == 200
         data = r.json()
         assert data["count"] == 3
+        assert "fetched_at" in data
         items = data["items"]
         types = {it["type"] for it in items}
         assert types == {"issue", "merge_request"}
@@ -1529,7 +1873,45 @@ class TestItemsEndpoint:
             assert "web_url" in it
             assert "labels" in it
             assert "reasons" in it
+            assert "reason_details" in it
             assert isinstance(it["reasons"], list)
+        issue_items = [it for it in items if it["type"] == "issue"]
+        assert any("mention_api" in it["reason_details"].get("mention", []) for it in issue_items)
+
+    def test_items_excludes_reply_only_issue(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.models import IssueRef
+
+        reply_only = IssueRef.from_api(
+            {
+                "project_id": 1,
+                "iid": 88,
+                "title": "Reply Only API Issue",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gl/reply-only-api",
+                "updated_at": "2026-07-01T00:00:00Z",
+            },
+            type="issue",
+        )
+
+        monkeypatch.setattr(app_module, "fetch_items", lambda *a, **kw: [])
+        monkeypatch.setattr(
+            app_module,
+            "fetch_issue_low_threshold_items",
+            lambda *a, **kw: ([], [reply_only]),
+        )
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+
+        r = client.get("/api/items", params={"username": "alice"})
+
+        assert r.status_code == 200
+        assert r.json()["count"] == 0
+        assert r.json()["items"] == []
 
     @responses.activate
     def test_items_missing_username(self, client, tmp_db):
@@ -1543,6 +1925,56 @@ class TestItemsEndpoint:
         r = client.get("/api/items", params={"username": "alice", "since": "garbage"})
         assert r.status_code == 400
         assert "since" in r.json()["detail"]
+
+    def test_items_refresh_param_forces_reload(self, client, monkeypatch, tmp_db):
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        from gitlab_issues_finder import app as app_module
+        from gitlab_issues_finder.models import IssueRef
+        from gitlab_issues_finder.queries import ItemKind, Relation
+
+        counters = {"fetch_items": 0}
+
+        def make_ref(iid: int) -> IssueRef:
+            return IssueRef.from_api(
+                {
+                    "project_id": 1,
+                    "iid": iid,
+                    "title": f"Item {iid}",
+                    "state": "opened",
+                    "labels": [],
+                    "assignee": None,
+                    "web_url": f"https://gl/{iid}",
+                    "updated_at": "2026-07-01T00:00:00Z",
+                },
+                type="issue",
+            )
+
+        def fake_fetch_items(gl, username, relation, kind, page_size=100):
+            counters["fetch_items"] += 1
+            if relation is Relation.ASSIGNEE and kind is ItemKind.ISSUE:
+                return [make_ref(counters["fetch_items"])]
+            return []
+
+        monkeypatch.setattr(app_module, "fetch_items", fake_fetch_items)
+        monkeypatch.setattr(app_module, "fetch_issue_low_threshold_items", lambda *a, **kw: ([], []))
+        monkeypatch.setattr(app_module, "resolve_user_ids", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_items_by_user_id", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_subscribed", lambda *a, **kw: [])
+        monkeypatch.setattr(app_module, "fetch_reacted", lambda *a, **kw: [])
+
+        r1 = client.get("/api/items", params={"username": "alice"})
+        r2 = client.get("/api/items", params={"username": "alice"})
+        r3 = client.get("/api/items", params={"username": "alice", "refresh": 1})
+
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert r3.status_code == 200
+        assert counters["fetch_items"] == 10
+        assert r1.json()["items"][0]["title"] == "Item 1"
+        assert r2.json()["items"][0]["title"] == "Item 1"
+        assert r3.json()["items"][0]["title"] == "Item 6"
+        assert r3.json()["items"][0]["reasons"] == ["assignee"]
 
 
 class TestItemsPageSizeOverride:

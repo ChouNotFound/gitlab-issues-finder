@@ -106,14 +106,13 @@ def _iter_pages(
 
 
 def _make_params(query: dict) -> dict:
-    """所有 fetch_* 共用前缀：state=opened + 跨实例搜索（with_membership=false）。
+    """所有 fetch_* 共用前缀：scope=all + state=opened + 跨实例搜索。
 
-    with_membership=false 是关键修复：让搜索跨整个实例（不限用户
-    membership），从而发现"我被分派但我不是该项目成员"的 item。
-    否则 GitLab 默认按用户 membership 范围搜索，导致"项目里明明
-    给我派了活，但看板查不到"的体验。
+    scope=all 避免 GitLab 全局列表接口默认只返回当前 token 相关的子集；
+    with_membership=false 让搜索跨整个实例（不限用户 membership），从而发现
+    "我被分派但我不是该项目成员"的 item。
     """
-    return {**query, "state": "opened", "with_membership": "false"}
+    return {"scope": "all", **query, "state": "opened", "with_membership": "false"}
 
 
 def fetch_items(
@@ -305,8 +304,29 @@ def fetch_issue_notes(
 
 
 def _mention_regex(username: str) -> re.Pattern[str]:
+    """构造匹配 ``@<username>`` 的正则。
+
+    GitLab 用户名区分大小写，因此不使用 ``re.IGNORECASE``：
+    使用 ``IGNORECASE`` 会把 ``@Bob`` 也匹配 ``bob`` 的查询，从而在不同
+    用户名仅大小写差异时产生交叉误统计。
+    """
     escaped = re.escape(username)
-    return re.compile(rf"(?<![\w@])@{escaped}(?![\w.\-])", re.IGNORECASE)
+    return re.compile(rf"(?<![\w@])@{escaped}(?![\w.\-])")
+
+
+def _is_self_authored_note(note: dict, username: str) -> bool:
+    """判断 note 是否由 ``username`` 本人发出。
+
+    GitLab ``activity_filter=only_comments`` 已过滤系统事件，但为了
+    防御性兜底（缺 ``author`` 字段、``author`` 缺 ``username`` 字段、
+    ``username`` 为 ``None``），一律保守视为「非本人」——宁可多走一次
+    匹配也不能误排除他人评论。
+    """
+    author = note.get("author") or {}
+    author_username = author.get("username") if isinstance(author, dict) else None
+    if not isinstance(author_username, str):
+        return False
+    return author_username == username
 
 
 def fetch_issue_low_threshold_items(
@@ -314,39 +334,48 @@ def fetch_issue_low_threshold_items(
     username: str,
     page_size: int = 100,
 ) -> tuple[list[IssueRef], list[IssueRef]]:
-    """补齐 Issue 的低门槛参与定义。
+    """补齐 Issue 的显式 mention 定义。
 
-    返回 `(mentioned_items, replied_items)`：
-      - mentioned_items: 在 title / description / notes 中显式 @ 到 username
-      - replied_items: 存在该 username 的至少一条非 system note
+    返回 `(mentioned_items, [])`：
+
+    - mentioned_items：在 title / description / **他人**评论中显式
+      ``@`` 到 ``username`` 的 issue 列表。
+
+    注意：
+
+    1. 评论扫描时排除本人发出的 note——避免「我在自己评论里
+       ``@bob``」被错误地算作「``@我``」（这是「@我」维度大量误统
+       计的根因）。
+    2. 第二个返回值仅为兼容旧调用方保留；本人回复不再属于默认
+       参与度口径。
+    3. title / description 不按作者过滤：若用户自己创建了一个
+       issue 并在 description 中 ``@他人``，GitLab API 层无法
+       区分「自创引用」与「他人 ``@`` 我」，目前保留现状。如有
+       强烈需求可在 product 上明确说明。
     """
     if not username:
         return [], []
 
     mention_re = _mention_regex(username)
     mentioned: list[IssueRef] = []
-    replied: list[IssueRef] = []
     for payload in fetch_open_issues(gl, page_size):
         ref = IssueRef.from_api(payload, type=ItemKind.ISSUE.type_name)
         title = str(payload.get("title", ""))
         description = str(payload.get("description", ""))
         matched_mention = bool(mention_re.search(title) or mention_re.search(description))
-        matched_reply = False
 
         for note in fetch_issue_notes(gl, ref.project_id, ref.iid, page_size):
+            if _is_self_authored_note(note, username):
+                # 自己发出的评论不算「@我」——这是「@我」维度大量误统计的根因。
+                continue
             body = str(note.get("body", ""))
             if mention_re.search(body):
                 matched_mention = True
-            author = note.get("author") or {}
-            if not note.get("system") and author.get("username") == username:
-                matched_reply = True
 
         if matched_mention:
             mentioned.append(ref)
-        if matched_reply:
-            replied.append(ref)
 
-    return mentioned, replied
+    return mentioned, []
 
 
 def fetch_users(gl: gitlab.Gitlab, page_size: int = 100, max_total: int = 200) -> list[dict]:

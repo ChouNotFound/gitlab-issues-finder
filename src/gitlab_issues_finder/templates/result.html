@@ -26,7 +26,7 @@
                 <p style="margin: 0; color: var(--c-text-muted); font-size: 13px;">
                     参与维度：
                     <span class="reason-tag reason-assignee">assignee</span>
-                    <span class="reason-tag reason-mention">mention</span>
+                    <span class="reason-tag reason-mention">mention</span><span class="reason-source source-literal_mention">@</span>
                     <span class="reason-tag reason-author">author</span>
                     <span class="reason-tag reason-label">label</span>
                     <span style="margin-left: 12px;">
@@ -57,7 +57,7 @@
                             </tr>
                         </thead>
                         <tbody>
-                            {% for item, reasons in issues %}
+                            {% for item, reasons, detail_map in issues %}
                             <tr>
                                 <td><span class="num">#{{ item.iid }}</span><span class="cell-meta">p{{ item.project_id }}{% if project_info and project_info.get(item.project_id) %} <span class="project-name">{{ project_info[item.project_id].path_with_namespace }}</span>{% endif %}</span></td>
                                 <td class="cell-title">
@@ -69,7 +69,17 @@
                                 </td>
                                 <td><span class="badge-state badge-{{ item.state }}">{{ item.state }}</span></td>
                                 <td>
-                                    {% for r in reasons %}<span class="reason-tag reason-{{ r }}">{{ r }}</span>{% endfor %}
+                                    {% for r in reasons %}
+                                    <span class="reason-tag reason-{{ r }}">{{ r }}</span>
+                                    {% if r == 'mention' %}
+                                        {% for d in detail_map.get('mention', []) %}
+                                            <span class="reason-source source-{{ d }}"
+                                                  title="{% if d == 'mention_api' %}GitLab mention_username 命中{% elif d == 'literal_mention' %}标题、描述或评论中出现 @{{ username }}{% endif %}">
+                                                {% if d == 'mention_api' %}api@{% elif d == 'literal_mention' %}@{% else %}{{ d }}{% endif %}
+                                            </span>
+                                        {% endfor %}
+                                    {% endif %}
+                                    {% endfor %}
                                 </td>
                                 <td>
                                     {% for label in item.labels %}<span class="tag">{{ label }}</span>{% endfor %}
@@ -111,7 +121,7 @@
                             </tr>
                         </thead>
                         <tbody>
-                            {% for item, reasons in merge_requests %}
+                            {% for item, reasons, detail_map in merge_requests %}
                             <tr>
                                 <td><span class="num">!{{ item.iid }}</span><span class="cell-meta">p{{ item.project_id }}{% if project_info and project_info.get(item.project_id) %} <span class="project-name">{{ project_info[item.project_id].path_with_namespace }}</span>{% endif %}</span></td>
                                 <td class="cell-title">

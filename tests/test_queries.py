@@ -223,7 +223,107 @@ class TestIssueLowThresholdQueries:
         )
         mentioned, replied = fetch_issue_low_threshold_items(gl, "alice")
         assert [(it.project_id, it.iid) for it in mentioned] == [(201, 7)]
-        assert [(it.project_id, it.iid) for it in replied] == [(202, 8)]
+        assert replied == []
+
+    @responses.activate
+    def test_low_threshold_excludes_self_authored_note(self, gl):
+        """Bug #1 回归：自己评论里 @ 他人不算「@我」。
+
+        查询 alice；alice 在某 issue 评论里 @bob。该 issue 不应在
+        alice 的 mentioned 列表中（否则 bob 的「@我」会被污染，反
+        之亦然）。
+        """
+        issues_payload = [
+            {
+                "project_id": 203,
+                "iid": 9,
+                "title": "Plain issue",
+                "description": "No explicit mention here",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gitlab.example.com/group/proj5/-/issues/9",
+                "updated_at": "2026-07-03T11:00:00.000Z",
+            }
+        ]
+        _add_paginated_endpoint(responses, "/issues", [issues_payload])
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/203/issues/9/notes",
+            json=load_fixture("issue_notes_self_mentioning.json"),
+            status=200,
+            match_querystring=False,
+        )
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
+        # alice 自己 @bob 不算 alice 被 @ -> 不应在结果中
+        assert mentioned == []
+
+    @responses.activate
+    def test_low_threshold_is_case_sensitive(self, gl):
+        """Bug #2 回归：GitLab 用户名区分大小写，@Bob 不应误命中 bob 查询。"""
+        issues_payload = [
+            {
+                "project_id": 204,
+                "iid": 10,
+                "title": "Issue with case-different mention",
+                "description": "Hey @Bob please look",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gitlab.example.com/group/proj6/-/issues/10",
+                "updated_at": "2026-07-03T12:00:00.000Z",
+            }
+        ]
+        _add_paginated_endpoint(responses, "/issues", [issues_payload])
+        # 即使 title/desc 未命中，实现仍会调用 fetch_issue_notes 注册端点
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/204/issues/10/notes",
+            json=[],
+            status=200,
+            match_querystring=False,
+        )
+        # 不需要走 note 路径：title/desc 触发，但移除 IGNORECASE 后应不再命中
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "bob")
+        assert mentioned == []
+
+    @responses.activate
+    def test_low_threshold_skips_note_with_missing_author(self, gl):
+        """健壮性：note 缺 author 字段时不应抛异常，应保守视为他人评论。"""
+        issues_payload = [
+            {
+                "project_id": 205,
+                "iid": 11,
+                "title": "Defensive test",
+                "description": "no @ here",
+                "state": "opened",
+                "labels": [],
+                "assignee": None,
+                "web_url": "https://gitlab.example.com/group/proj7/-/issues/11",
+                "updated_at": "2026-07-03T13:00:00.000Z",
+            }
+        ]
+        _add_paginated_endpoint(responses, "/issues", [issues_payload])
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/205/issues/11/notes",
+            json=[
+                {
+                    "id": 1005,
+                    "body": "Note without author field, mentions @alice",
+                    # 注意：没有 author 键
+                    "system": False,
+                    "created_at": "2026-07-03T13:30:00.000Z",
+                    "updated_at": "2026-07-03T13:30:00.000Z",
+                }
+            ],
+            status=200,
+            match_querystring=False,
+        )
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
+        # author 缺失视为「非本人」，因此 note 中的 @alice 仍应命中
+        assert len(mentioned) == 1
+        assert (mentioned[0].project_id, mentioned[0].iid) == (205, 11)
 
 
 class TestFetchMergeRequestsByLabels:
@@ -507,6 +607,24 @@ class TestFetchItemsFactory:
         fetch_items(gl, "alice", Relation.ASSIGNEE, ItemKind.ISSUE)
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs.get("with_membership") == ["false"]
+        assert last_qs.get("scope") == ["all"]
+
+    @responses.activate
+    @pytest.mark.parametrize(
+        "relation,param",
+        [
+            (Relation.ASSIGNEE, "assignee_username"),
+            (Relation.REVIEWER, "reviewer_username"),
+        ],
+    )
+    def test_fetch_merge_requests_passes_scope_all(self, gl, relation, param):
+        _add_user_endpoint(responses)
+        _add_paginated_endpoint(responses, "/merge_requests", [[]])
+        fetch_items(gl, "alice", relation, ItemKind.MERGE_REQUEST)
+        last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
+        assert last_qs[param] == ["alice"]
+        assert last_qs["scope"] == ["all"]
+        assert last_qs["with_membership"] == ["false"]
 
 
 class TestFetchLabeledKind:
@@ -592,6 +710,7 @@ class TestFetchItemsByUserId:
         assert last_qs["assignee_id"] == ["42"]
         assert last_qs["state"] == ["opened"]
         assert last_qs["with_membership"] == ["false"]
+        assert last_qs["scope"] == ["all"]
 
     @responses.activate
     def test_assignee_id_mr(self, gl):
@@ -608,6 +727,7 @@ class TestFetchItemsByUserId:
         assert len(result) == 2
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs["assignee_id"] == ["42"]
+        assert last_qs["scope"] == ["all"]
 
     @responses.activate
     def test_reviewer_id_mr(self, gl):
@@ -624,6 +744,7 @@ class TestFetchItemsByUserId:
         assert len(result) == 2
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs["reviewer_id"] == ["42"]
+        assert last_qs["scope"] == ["all"]
 
     def test_reviewer_rejected_for_issue(self, gl):
         with pytest.raises(ValueError, match="not valid for kind"):

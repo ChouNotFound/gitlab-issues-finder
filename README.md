@@ -6,7 +6,7 @@
 
 ## ✨ 特性
 
-- 🔍 **参与度统计更贴近实际**：Issue 支持 assignee / mention / author / reply 低门槛参与；MR 只统计 assignee；subscribed / reaction 维度继续保留
+- 🔍 **参与度统计更贴近实际**：Issue 统计 assignee / mention / author；MR 统计 reviewer / assignee
 - 🏷️ **自选标签**：逗号分隔多标签，AND 关系精确过滤
 - 🗂️ **看板视图**：5 列 Kanban + 自定义列、拖拽改分桶、列名可改、列可删可加、列可重排
 - 🔍 **看板内搜索**：标题实时搜索 + 5 种排序（更新/IID/标题）
@@ -71,6 +71,7 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 ### 查询视图（`/search`）
 
 按 type 分两段（Issues、Merge Requests），列出所有参与维度的命中项。
+维度统计彼此独立：同一 item 同时命中 assignee 和 mention 时两个维度都会计数；总 Items / 导出列表按唯一 item 去重。
 
 每行展示：
 - IID + 所属项目（`#42 p101`）
@@ -85,11 +86,11 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 
 | 列 | 命中条件 |
 |---|---|
-| 需我审查 | 当前保留为空列（兼容旧看板布局） |
+| 需我审查 | MR `reviewer_username=X` / `reviewer_id` |
 | 需我动 | `assignee_username=X` |
-| @我的 | `mention_username=X` |
+| @我的 | Issue `mention_username=X`、正文/标题/评论中 `@X` |
 | 我创建的 | `author_username=X` |
-| 其他参与 | 兜底（Issue reply-only、subscribed / reaction 命中项等落这里） |
+| 其他参与 | 兜底（例如标签过滤命中但未命中上述关系） |
 
 **特性**：
 - 拖拽卡片到任意列 → 立即持久化到 SQLite
@@ -106,10 +107,10 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 |---|---|---|
 | `GET` | `/` | 首页 |
 | `POST` | `/search` | 查询视图（form: `username`, `labels`, `since`, `until`） |
-| `GET` | `/board` | 看板视图（query: `username`, `view`, `q`, `since`, `until`） |
+| `GET` | `/board` | 看板视图（query: `username`, `view`, `q`, `since`, `until`, `refresh=1` 手动刷新） |
 | `GET` | `/api/users` | 活跃用户列表（首页自动补全） |
 | `GET` | `/api/me` |
-| `GET` | `/api/items` | JSON 版 /search：username + labels + since/until + page_size，返回 items 列表 | 当前配置 token 对应的 GitLab 用户信息 |
+| `GET` | `/api/items` | JSON 版 /search：username + labels + since/until + page_size + refresh，返回 items 列表 |
 | `GET` | `/api/recent-users` | 最近访问的用户 |
 | `POST` | `/api/board/move` | 拖拽覆盖 `{username, item_key, column_id}` |
 | `POST` | `/api/board/reset` | 清除某用户所有拖拽 |
@@ -149,12 +150,10 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 
 ## 🔑 Token 与 username 的关系
 
-仓库按 `username` 拉取 Issue 的 assignee / mention / author，并补扫 opened issues 的标题、描述和评论来识别 `@username` 与“本人回复”；MR 只按 assignee 统计。除 subscribed / reaction 外，这些都是以 username 为口径的只读查询。
+仓库按 `username` 拉取 Issue 的 assignee / mention / author，并补扫 opened issues 的标题、描述和评论来识别 `@username`；MR 按 reviewer / assignee 统计。多 assignee / reviewer 场景会先把 username 解析成 user_id，再用 `assignee_id` / `reviewer_id` 补齐。
+全局列表查询会带 `scope=all`，避免 GitLab 默认 scope 导致 assignee/reviewer 结果缺失。
 
-但 GitLab API 中 `subscribed` 和 `my_reaction_emoji` 这两个参数是**以 Token 持有者为口径**的——即 `?subscribed=true` 返回的是当前 Token 持有者订阅的 items，与查询里填的 `username` 解耦。所以：
-
-- 想看自己订阅了哪些 / 自己点过 👍 的：用你自己的 Token + 自己的 username，结果是 Token 持有者的数据。
-- 想看别人订阅了哪些：需要用对方的 Token + 对方的 username。
+看板默认复用进程内缓存，切换视图不会反复请求 GitLab；需要最新结果时点击页面上的“刷新”，或调用 `/board?...&refresh=1` / `/api/items?...&refresh=1`。
 
 ## 🔐 SSL 自签名证书
 

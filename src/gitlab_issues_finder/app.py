@@ -45,8 +45,6 @@ from gitlab_issues_finder.middleware import RequestIDMiddleware, SecurityHeaders
 from gitlab_issues_finder.models import IssueRef
 from gitlab_issues_finder.project_resolver import resolve as resolve_projects
 from gitlab_issues_finder.queries import (
-    EXTRA_REACTION,
-    EXTRA_SUBSCRIBED,
     REACTION_EMOJI_DEFAULT,
     ItemKind,
     Relation,
@@ -90,7 +88,7 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="GitLab Status Board",
-    description="Personal tool for a self-hosted GitLab: pull issues related to a username across assignee / mention / author / reply dimensions, keep merge requests scoped to assignee, render as a Kanban board, and export to CSV / Markdown.",
+    description="Personal tool for a self-hosted GitLab: pull issues related to a username across assignee / mention / author dimensions, keep merge requests scoped to reviewer / assignee, render as a Kanban board, and export to CSV / Markdown.",
     lifespan=_lifespan,
     openapi_tags=[
         {"name": "UI", "description": "Server-rendered HTML pages."},
@@ -198,23 +196,23 @@ ISSUE_STAT_KEYS: list[tuple[str, str, str]] = [
     ("assignee", "指派给我", "🟦"),
     ("mention", "@我", "💬"),
     ("author", "我创建", "✏️"),
-    (EXTRA_SUBSCRIBED, "我订阅", "🔔"),
-    (EXTRA_REACTION, "我反应", "👍"),
 ]
 MR_STAT_KEYS: list[tuple[str, str, str]] = [
+    ("reviewer", "需我审查", "🟣"),
     ("assignee", "指派给我", "🟦"),
-    (EXTRA_SUBSCRIBED, "我订阅", "🔔"),
-    (EXTRA_REACTION, "我反应", "👍"),
 ]
 
-_USER_ITEMS_CACHE_TTL_SECONDS = 30.0
-_USER_ITEMS_CACHE: dict[tuple, tuple[float, dict]] = {}
+# 保留这些导入在 app 模块上，便于旧测试/外部代码继续 monkeypatch；
+# 默认看板统计不再把 subscribed/reaction 纳入结果。
+_LEGACY_EXTRA_FETCHERS = (fetch_subscribed, fetch_reacted)
+
+_USER_ITEMS_CACHE: dict[tuple, dict] = {}
 
 
 def _relation_priority_for_type(item_type: str) -> tuple[str, ...]:
     """按 item 类型返回默认分桶优先级。"""
     if item_type == "merge_request":
-        return ("assignee",)
+        return ("reviewer", "assignee")
     return ("assignee", "mention", "author")
 
 
@@ -227,6 +225,11 @@ def _clone_loaded_items(loaded: dict) -> dict:
         "subscribed": list(loaded["subscribed"]),
         "reacted": list(loaded["reacted"]),
         "key_to_reasons": {k: list(v) for k, v in loaded["key_to_reasons"].items()},
+        "key_to_reason_details": {
+            k: {reason: list(details) for reason, details in reason_map.items()}
+            for k, reason_map in loaded.get("key_to_reason_details", {}).items()
+        },
+        "fetched_at": loaded["fetched_at"],
     }
 
 
@@ -251,6 +254,59 @@ def _clear_user_items_cache() -> None:
     _USER_ITEMS_CACHE.clear()
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _add_reason_detail(
+    details: dict[tuple[str, int, int], dict[str, list[str]]],
+    item: IssueRef,
+    reason: str,
+    detail: str,
+) -> None:
+    reason_details = details.setdefault(item.key, {}).setdefault(reason, [])
+    if detail not in reason_details:
+        reason_details.append(detail)
+
+
+def _valid_dim_for_view(view: str, dim: str) -> str:
+    dim = dim.strip()
+    if view == "issues" and dim in {k for k, _, _ in ISSUE_STAT_KEYS}:
+        return dim
+    if view == "mrs" and dim in {k for k, _, _ in MR_STAT_KEYS}:
+        return dim
+    return ""
+
+
+def _dim_label(view: str, dim: str) -> str:
+    keys = ISSUE_STAT_KEYS if view == "issues" else MR_STAT_KEYS if view == "mrs" else []
+    for key, label, _icon in keys:
+        if key == dim:
+            return label
+    return ""
+
+
+def _filter_items_for_view(
+    items: list[IssueRef],
+    key_to_reasons: dict[tuple[str, int, int], list[str]],
+    view: str,
+    dim: str = "",
+) -> list[IssueRef]:
+    if view == "all":
+        return list(items)
+    if view == "issues":
+        return [
+            it for it in items
+            if it.type == "issue" and (not dim or dim in key_to_reasons.get(it.key, []))
+        ]
+    if view == "mrs":
+        return [
+            it for it in items
+            if it.type == "merge_request" and (not dim or dim in key_to_reasons.get(it.key, []))
+        ]
+    return []
+
+
 # ----- 数据装配 helper -----
 def _load_user_items(
     gl,
@@ -258,44 +314,51 @@ def _load_user_items(
     page_size: int,
     label_list: list[str] | None = None,
     reaction_emoji: str = REACTION_EMOJI_DEFAULT,
+    force_refresh: bool = False,
 ):
     """一站式拉取与 username 相关的所有 items 及 reason 标签。
 
     覆盖维度：
-      1. Issue: assignee / mention / author + mention/reply 补充
-      2. MR: assignee
-      3. 多 assignee —— 按 user_id (补齐 GitLab 13+ 场景)
-      4. subscribed (Token 持有者)
-      5. reaction (Token 持有者，可指定 emoji)
-      6. labels AND 过滤 (可选)
+      1. Issue: assignee / mention / author，其中 mention 包含 GitLab mention 与显式 @username
+      2. MR: reviewer / assignee
+      3. 多 assignee/reviewer —— 按 user_id (补齐 GitLab 13+ 场景)
+      4. labels AND 过滤 (可选)
 
     返回 dict，键：
       - all_items: 去重后的全集 (包含 labels 命中的项)
       - issue_lists / mr_lists: 每个 relation 对应的列表
-      - subscribed / reacted: 单独的列表
       - key_to_reasons: {(type, project_id, iid): [reason, ...]}
+      - key_to_reason_details: {(type, project_id, iid): {reason: [detail, ...]}}
+      - fetched_at: GitLab 数据刷新时间
     """
     label_list = list(label_list or [])
     cache_key = _cache_key_for_user_items(gl, username, page_size, label_list, reaction_emoji)
-    now = time.monotonic()
     cached = _USER_ITEMS_CACHE.get(cache_key)
-    if cached and now - cached[0] < _USER_ITEMS_CACHE_TTL_SECONDS:
-        return _clone_loaded_items(cached[1])
+    if cached and not force_refresh:
+        return _clone_loaded_items(cached)
 
     # ---- 1) username-based 拉取 ----
+    issues_assigned = list(fetch_items(gl, username, Relation.ASSIGNEE, ItemKind.ISSUE, page_size))
+    issues_mentioned_by_api = list(
+        fetch_items(gl, username, Relation.MENTION, ItemKind.ISSUE, page_size)
+    )
+    issues_authored = list(fetch_items(gl, username, Relation.AUTHOR, ItemKind.ISSUE, page_size))
     issue_lists: dict[str, list[IssueRef]] = {
-        "assignee": list(fetch_items(gl, username, Relation.ASSIGNEE, ItemKind.ISSUE, page_size)),
-        "mention": list(fetch_items(gl, username, Relation.MENTION, ItemKind.ISSUE, page_size)),
-        "author": list(fetch_items(gl, username, Relation.AUTHOR, ItemKind.ISSUE, page_size)),
+        "assignee": issues_assigned,
+        "mention": issues_mentioned_by_api,
+        "author": issues_authored,
     }
     mr_lists: dict[str, list[IssueRef]] = {
+        "reviewer": list(
+            fetch_items(gl, username, Relation.REVIEWER, ItemKind.MERGE_REQUEST, page_size)
+        ),
         "assignee": list(
             fetch_items(gl, username, Relation.ASSIGNEE, ItemKind.MERGE_REQUEST, page_size)
         ),
     }
 
-    # ---- 2) Issue mention/reply 补充 ----
-    mentioned_issues, replied_issues = fetch_issue_low_threshold_items(gl, username, page_size)
+    # ---- 2) Issue mention 补充 ----
+    mentioned_issues, _replied_issues = fetch_issue_low_threshold_items(gl, username, page_size)
     issue_lists["mention"] = dedupe(
         issue_lists["mention"],
         mentioned_issues,
@@ -316,18 +379,16 @@ def _load_user_items(
                 gl, user_ids, Relation.ASSIGNEE, ItemKind.MERGE_REQUEST, page_size
             ),
         )
+        mr_lists["reviewer"] = dedupe(
+            mr_lists["reviewer"],
+            fetch_items_by_user_id(
+                gl, user_ids, Relation.REVIEWER, ItemKind.MERGE_REQUEST, page_size
+            ),
+        )
 
-    # ---- 4) subscribed ----
-    subscribed: list[IssueRef] = dedupe(
-        fetch_subscribed(gl, ItemKind.ISSUE, page_size),
-        fetch_subscribed(gl, ItemKind.MERGE_REQUEST, page_size),
-    )
-
-    # ---- 5) reaction ----
-    reacted: list[IssueRef] = dedupe(
-        fetch_reacted(gl, reaction_emoji, ItemKind.ISSUE, page_size),
-        fetch_reacted(gl, reaction_emoji, ItemKind.MERGE_REQUEST, page_size),
-    )
+    # subscribed / reaction 查询函数保留，但不属于默认统计口径。
+    subscribed: list[IssueRef] = []
+    reacted: list[IssueRef] = []
 
     # ---- 6) labels (AND 关系) ----
     issues_labeled: list[IssueRef] = []
@@ -340,13 +401,15 @@ def _load_user_items(
 
     # ---- 组装 key_to_reasons ----
     key_to_reasons: dict[tuple[str, int, int], list[str]] = {}
-    for reason, lst in {**issue_lists, **mr_lists}.items():
-        for it in lst:
-            key_to_reasons.setdefault(it.key, []).append(reason)
-    for it in subscribed:
-        key_to_reasons.setdefault(it.key, []).append(EXTRA_SUBSCRIBED)
-    for it in reacted:
-        key_to_reasons.setdefault(it.key, []).append(EXTRA_REACTION)
+    key_to_reason_details: dict[tuple[str, int, int], dict[str, list[str]]] = {}
+    for grouped_lists in (issue_lists, mr_lists):
+        for reason, lst in grouped_lists.items():
+            for it in lst:
+                key_to_reasons.setdefault(it.key, []).append(reason)
+    for it in issues_mentioned_by_api:
+        _add_reason_detail(key_to_reason_details, it, "mention", "mention_api")
+    for it in mentioned_issues:
+        _add_reason_detail(key_to_reason_details, it, "mention", "literal_mention")
     if label_list:
         for it in issues_labeled:
             key_to_reasons.setdefault(it.key, []).append("label")
@@ -359,7 +422,6 @@ def _load_user_items(
         *mr_lists.values(),
         subscribed,
         reacted,
-        replied_issues,
         issues_labeled,
         mrs_labeled,
     )
@@ -371,8 +433,10 @@ def _load_user_items(
         "subscribed": subscribed,
         "reacted": reacted,
         "key_to_reasons": key_to_reasons,
+        "key_to_reason_details": key_to_reason_details,
+        "fetched_at": _now_iso(),
     }
-    _USER_ITEMS_CACHE[cache_key] = (now, _clone_loaded_items(loaded))
+    _USER_ITEMS_CACHE[cache_key] = _clone_loaded_items(loaded)
     return loaded
 
 
@@ -406,8 +470,8 @@ async def search(
 
     参与维度（任一命中即算参与）：
       - Issue：assignee_username / mention_username / author_username /
-        title-description-notes 中 @username / 本人回复；
-      - MR：assignee_username；
+        title-description-notes 中 @username；
+      - MR：reviewer_username / assignee_username；
       - labels 是可选附加条件（AND 多标签）。
     """
     username = username.strip()
@@ -433,6 +497,7 @@ async def search(
     loaded = _load_user_items(gl, username, cfg.page_size, label_list=label_list)
     all_items = _filter_by_time(loaded["all_items"], s_date, u_date)
     key_to_reasons = loaded["key_to_reasons"]
+    key_to_reason_details = loaded["key_to_reason_details"]
 
     # 解析项目名（用于模板显示）
     project_info: dict = {}
@@ -455,10 +520,18 @@ async def search(
     def compute_reasons(item: IssueRef) -> list[str]:
         return list(key_to_reasons.get(item.key, []))
 
+    def compute_reason_details(item: IssueRef) -> dict[str, list[str]]:
+        return {
+            reason: list(details)
+            for reason, details in key_to_reason_details.get(item.key, {}).items()
+        }
+
     issues.sort(key=lambda it: it.updated_at, reverse=True)
     merge_requests.sort(key=lambda it: it.updated_at, reverse=True)
-    issues_with_reasons = [(it, compute_reasons(it)) for it in issues]
-    mrs_with_reasons = [(it, compute_reasons(it)) for it in merge_requests]
+    issues_with_reasons = [(it, compute_reasons(it), compute_reason_details(it)) for it in issues]
+    mrs_with_reasons = [
+        (it, compute_reasons(it), compute_reason_details(it)) for it in merge_requests
+    ]
 
     # 更新最近使用
     with contextlib.suppress(Exception):
@@ -490,6 +563,8 @@ async def board(
     view: str = Query("summary", description="视图模式: summary|all|issues|mrs|relation|project"),
     since: str = Query("", description="只看 updated_at >= 此日期 (YYYY-MM-DD)"),
     until: str = Query("", description="只看 updated_at <= 此日期 (YYYY-MM-DD)"),
+    dim: str = Query("", description="维度过滤: issue=assignee|mention|author, mr=reviewer|assignee"),
+    refresh: int = Query(0, ge=0, le=1, description="1 = 强制刷新 GitLab 数据"),
 ) -> HTMLResponse:
     """Git 状态看板（控制台样式）。
 
@@ -520,6 +595,14 @@ async def board(
                 "active_tab": "board",
                 "theme": "auto",
                 "filter_q": "",
+                "since": "",
+                "until": "",
+                "active_dim": "",
+                "active_dim_label": "",
+                "fetched_at": "",
+                "display_items": [],
+                "key_to_reasons": {},
+                "reason_details": {},
                 "project_info": {},
                 "ISSUE_STAT_KEYS": ISSUE_STAT_KEYS,
                 "MR_STAT_KEYS": MR_STAT_KEYS,
@@ -530,6 +613,7 @@ async def board(
     allowed_views = {"summary", "all", "issues", "mrs", "relation", "project"}
     if view not in allowed_views:
         view = "summary"
+    active_dim = _valid_dim_for_view(view, dim)
 
     # 时间范围参数先验证
     s_date_b = _parse_date(since)
@@ -543,9 +627,17 @@ async def board(
     gl = build_client(cfg)
 
     label_list = [s.strip() for s in q.split(",") if s.strip()] if q else []
-    loaded = _load_user_items(gl, username, cfg.page_size, label_list=label_list)
+    loaded = _load_user_items(
+        gl,
+        username,
+        cfg.page_size,
+        label_list=label_list,
+        force_refresh=bool(refresh),
+    )
     all_items = _filter_by_time(loaded["all_items"], s_date_b, u_date_b)
     key_to_reasons = loaded["key_to_reasons"]
+    key_to_reason_details = loaded["key_to_reason_details"]
+    display_items = _filter_items_for_view(all_items, key_to_reasons, view, active_dim)
 
     # 解析项目名（用于模板显示）
     board_project_info: dict = {}
@@ -638,6 +730,7 @@ async def board(
             "items_by_rel": items_by_rel,
             "items_by_proj": items_by_proj,
             "all_items": all_items,
+            "display_items": display_items,
             "overrides": overrides,
             "summary": summary,
             "total_count": total,
@@ -645,6 +738,13 @@ async def board(
             "active_tab": "board",
             "theme": storage.get_theme(dbp, username),
             "filter_q": q,
+            "since": since,
+            "until": until,
+            "active_dim": active_dim,
+            "active_dim_label": _dim_label(view, active_dim),
+            "fetched_at": loaded["fetched_at"],
+            "key_to_reasons": key_to_reasons,
+            "reason_details": key_to_reason_details,
             "project_info": board_project_info,
             "ISSUE_STAT_KEYS": ISSUE_STAT_KEYS,
             "MR_STAT_KEYS": MR_STAT_KEYS,
@@ -662,11 +762,9 @@ def _empty_summary() -> dict:
         "by_relation_counts": {
             "issues": {
                 "assignee": 0, "mention": 0, "author": 0,
-                EXTRA_SUBSCRIBED: 0, EXTRA_REACTION: 0,
             },
             "mrs": {
-                "assignee": 0,
-                EXTRA_SUBSCRIBED: 0, EXTRA_REACTION: 0,
+                "reviewer": 0, "assignee": 0,
             },
         },
         "by_project": [],
@@ -675,6 +773,7 @@ def _empty_summary() -> dict:
 
 
 def _count_by_relation(items, key_to_reasons, dimensions):
+    """按维度独立计数；不同维度之间不互相去重。"""
     counts = {d: 0 for d in dimensions}
     for it in items:
         reasons = set(key_to_reasons.get(it.key, []))
@@ -780,6 +879,7 @@ async def api_items(
     since: str = Query("", description="只看 updated_at >= 此日期 (YYYY-MM-DD)"),
     until: str = Query("", description="只看 updated_at <= 此日期 (YYYY-MM-DD)"),
     page_size: int = Query(0, ge=0, le=100, description="覆盖 PAGE_SIZE（1-100）。0 = 用配置默认"),
+    refresh: int = Query(0, ge=0, le=1, description="1 = 强制刷新 GitLab 数据"),
 ) -> JSONResponse:
     """JSON 版 /search：返回 username 的所有 opened item 列表。
 
@@ -801,9 +901,16 @@ async def api_items(
     cfg = AppConfig.from_env()
     gl = build_client(cfg)
     effective_ps = page_size if page_size > 0 else cfg.page_size
-    loaded = _load_user_items(gl, username, effective_ps, label_list=label_list)
+    loaded = _load_user_items(
+        gl,
+        username,
+        effective_ps,
+        label_list=label_list,
+        force_refresh=bool(refresh),
+    )
     all_items = _filter_by_time(loaded["all_items"], s_date, u_date)
     key_to_reasons = loaded["key_to_reasons"]
+    key_to_reason_details = loaded["key_to_reason_details"]
     out = []
     for it in all_items:
         out.append(
@@ -818,9 +925,13 @@ async def api_items(
                 "assignee": it.assignee,
                 "updated_at": it.updated_at,
                 "reasons": list(key_to_reasons.get(it.key, [])),
+                "reason_details": {
+                    reason: list(details)
+                    for reason, details in key_to_reason_details.get(it.key, {}).items()
+                },
             }
         )
-    return JSONResponse({"count": len(out), "items": out})
+    return JSONResponse({"count": len(out), "fetched_at": loaded["fetched_at"], "items": out})
 
 
 @app.get("/api/recent-users", tags=["Users"])
@@ -1111,7 +1222,7 @@ async def api_preview(payload: dict = Body(...)) -> JSONResponse:
     dbp = _db_path()
     col_defs = storage.list_columns(dbp, username)
     col_ids = {c["id"] for c in col_defs}
-    # 默认分桶逻辑：Issue 走 assignee/mention/author，MR 只走 assignee，其余归 other。
+    # 默认分桶逻辑：Issue 走 assignee/mention/author，MR 走 reviewer/assignee，其余归 other。
     target = "other"
     for cand in _relation_priority_for_type(item_type):
         if cand in reasons and cand in col_ids:

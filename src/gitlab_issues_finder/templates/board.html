@@ -55,7 +55,10 @@
                     <p class="sidebar-username">@{{ username }}</p>
                 </div>
                 <nav class="sidebar-nav">
-                    {% set view_query = '&q=' + filter_q if filter_q else '' %}
+                    {% set view_query = '' %}
+                    {% if filter_q %}{% set view_query = view_query + '&q=' + filter_q %}{% endif %}
+                    {% if since %}{% set view_query = view_query + '&since=' + since %}{% endif %}
+                    {% if until %}{% set view_query = view_query + '&until=' + until %}{% endif %}
                     <a href="/board?username={{ username }}&view=summary{{ view_query }}"
                        class="sidebar-link {% if view == 'summary' %}active{% endif %}">
                         <span class="sidebar-link-icon">🏠</span>
@@ -99,6 +102,9 @@
                     <form method="get" action="/board" class="sidebar-filter">
                         <input type="hidden" name="username" value="{{ username }}">
                         <input type="hidden" name="view" value="{{ view }}">
+                        {% if active_dim %}<input type="hidden" name="dim" value="{{ active_dim }}">{% endif %}
+                        {% if since %}<input type="hidden" name="since" value="{{ since }}">{% endif %}
+                        {% if until %}<input type="hidden" name="until" value="{{ until }}">{% endif %}
                         <label class="field-label">标签过滤</label>
                         <input type="text" name="q" value="{{ filter_q }}"
                                placeholder="如 bug,priority::high"
@@ -127,8 +133,16 @@
                         <span class="console-subtitle">
                             @{{ username }}
                             {% if filter_q %}· 标签 {{ filter_q }}{% endif %}
+                            {% if active_dim_label %}· {{ active_dim_label }}{% endif %}
                         </span>
                     </h1>
+                    <div class="console-actions">
+                        {% if fetched_at %}
+                        <span class="cache-stamp">缓存 {{ fetched_at[:19].replace('T', ' ') }}</span>
+                        {% endif %}
+                        <a class="btn btn-sm btn-ghost"
+                           href="/board?username={{ username }}&view={{ view }}{% if active_dim %}&dim={{ active_dim }}{% endif %}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if since %}&since={{ since }}{% endif %}{% if until %}&until={{ until }}{% endif %}&refresh=1">刷新</a>
+                    </div>
                     {% if view != 'summary' %}
                     <div class="console-tools">
                         <input type="search" id="card-filter" placeholder="按标题搜索 (实时)..."
@@ -179,7 +193,7 @@
                         <span class="stat-group-label">Issues</span>
                         {% for key, label, icon in ISSUE_STAT_KEYS %}
                         <a class="stat-pill stat-pill-{{ key }}"
-                           href="/board?username={{ username }}&view=issues&dim={{ key }}">
+                           href="/board?username={{ username }}&view=issues&dim={{ key }}{{ view_query }}">
                             <span class="stat-pill-icon" aria-hidden="true">{{ icon }}</span>
                             <span class="stat-pill-label">{{ label }}</span>
                             <span class="stat-pill-count">{{ summary.by_relation_counts.issues[key] }}</span>
@@ -191,7 +205,7 @@
                         <span class="stat-group-label">Merge Requests</span>
                         {% for key, label, icon in MR_STAT_KEYS %}
                         <a class="stat-pill stat-pill-{{ key }}"
-                           href="/board?username={{ username }}&view=mrs&dim={{ key }}">
+                           href="/board?username={{ username }}&view=mrs&dim={{ key }}{{ view_query }}">
                             <span class="stat-pill-icon" aria-hidden="true">{{ icon }}</span>
                             <span class="stat-pill-label">{{ label }}</span>
                             <span class="stat-pill-count">{{ summary.by_relation_counts.mrs[key] }}</span>
@@ -202,7 +216,7 @@
 
                 <div class="console-panels">
                     <section class="console-panel">
-                        <h3 class="panel-title">按"与我关系"分布</h3>
+                        <h3 class="panel-title">默认分桶分布</h3>
                         <div class="relation-bars">
                             {% set rels = [('reviewer', '需我审查', summary.by_relation.reviewer),
                                            ('assignee', '需我动', summary.by_relation.assignee),
@@ -272,27 +286,38 @@
 
                 {# ====== 全部 / Issues / MRs 视图 ====== #}
                 {% elif view in ('all', 'issues', 'mrs') %}
-                {% set items_to_show = [] %}
-                {% if view == 'all' %}{% set _ = items_to_show.extend(all_items) %}
-                                {% elif view == 'issues' %}{% for it in all_items %}{% if it.type == 'issue' %}{% set _ = items_to_show.append(it) %}{% endif %}{% endfor %}
-                                {% elif view == 'mrs' %}{% for it in all_items %}{% if it.type == 'merge_request' %}{% set _ = items_to_show.append(it) %}{% endif %}{% endfor %}
-                                {% endif %}
+                {% set items_to_show = display_items %}
                 {% if items_to_show %}
                 <div class="table-wrapper">
                     <table class="data-table">
                         <thead>
                             <tr>
                                 <th>IID</th><th>Project</th><th>Title</th>
-                                <th>状态</th><th>Labels</th><th>更新</th>
+                                <th>状态</th><th>命中维度</th><th>Labels</th><th>更新</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for it in items_to_show %}
+                            {% set reasons = key_to_reasons.get(it.key, []) %}
+                            {% set detail_map = reason_details.get(it.key, {}) %}
                             <tr>
                                 <td><span class="num">{{ '!' if it.type == 'merge_request' else '#' }}{{ it.iid }}</span></td>
                                 <td><span class="cell-meta">P{{ it.project_id }}</span></td>
                                 <td class="cell-title"><a href="{{ it.web_url }}" target="_blank" rel="noopener">{{ it.title }}</a></td>
                                 <td><span class="badge-state badge-{{ it.state }}">{{ it.state }}</span></td>
+                                <td>
+                                    {% for r in reasons %}
+                                    <span class="reason-tag reason-{{ r }}">{{ r }}</span>
+                                    {% if r == 'mention' %}
+                                        {% for d in detail_map.get('mention', []) %}
+                                            <span class="reason-source source-{{ d }}"
+                                                  title="{% if d == 'mention_api' %}GitLab mention_username 命中{% elif d == 'literal_mention' %}标题、描述或评论中出现 @{{ username }}{% endif %}">
+                                                {% if d == 'mention_api' %}api@{% elif d == 'literal_mention' %}@{% else %}{{ d }}{% endif %}
+                                            </span>
+                                        {% endfor %}
+                                    {% endif %}
+                                    {% endfor %}
+                                </td>
                                 <td>{% for lb in it.labels[:3] %}<span class="tag">{{ lb }}</span>{% endfor %}{% if it.labels|length > 3 %}<span class="tag">+{{ it.labels|length - 3 }}</span>{% endif %}</td>
                                 <td><span class="num">{{ it.updated_at[:10] }}</span></td>
                             </tr>
