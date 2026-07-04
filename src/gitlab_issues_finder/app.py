@@ -35,7 +35,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gitlab_issues_finder import storage
-from gitlab_issues_finder.client import GitlabClient, build_client
+from gitlab_issues_finder.client import build_client
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.logging_setup import get_logger
@@ -52,8 +52,9 @@ from gitlab_issues_finder.queries import (
     fetch_items,
     fetch_items_by_user_id,
     fetch_labeled,
-    fetch_reacted,
-    fetch_subscribed,
+    # 以下两个是 monkeypatch targets, 不在 app 内部使用:
+    fetch_reacted,  # noqa: F401
+    fetch_subscribed,  # noqa: F401
     fetch_users,
     resolve_user_ids,
 )
@@ -201,10 +202,9 @@ MR_STAT_KEYS: list[tuple[str, str, str]] = [
     ("assignee", "指派给我", "🟦"),
 ]
 
-# 保留这些导入在 app 模块上，便于旧测试/外部代码继续 monkeypatch；
-# 默认看板统计不再把 subscribed/reaction 纳入结果。
-_LEGACY_EXTRA_FETCHERS = (fetch_subscribed, fetch_reacted)
-
+# subscribed / reaction 查询函数仍通过上面 import 暴露在 app 模块, 供外部
+# 代码 / 旧测试 monkeypatch (conftest._disable_extra_dimensions); 但
+# 默认看板统计不再调用它们。
 _USER_ITEMS_CACHE: dict[tuple, dict] = {}
 
 
@@ -221,8 +221,6 @@ def _clone_loaded_items(loaded: dict) -> dict:
         "all_items": list(loaded["all_items"]),
         "issue_lists": {k: list(v) for k, v in loaded["issue_lists"].items()},
         "mr_lists": {k: list(v) for k, v in loaded["mr_lists"].items()},
-        "subscribed": list(loaded["subscribed"]),
-        "reacted": list(loaded["reacted"]),
         "key_to_reasons": {k: list(v) for k, v in loaded["key_to_reasons"].items()},
         "key_to_reason_details": {
             k: {reason: list(details) for reason, details in reason_map.items()}
@@ -385,9 +383,7 @@ def _load_user_items(
             ),
         )
 
-    # subscribed / reaction 查询函数保留，但不属于默认统计口径。
-    subscribed: list[IssueRef] = []
-    reacted: list[IssueRef] = []
+    # 注: subscribed / reaction 默认不参与统计, 见 ``_load_user_items`` 顶部说明。
 
     # ---- 6) labels (AND 关系) ----
     issues_labeled: list[IssueRef] = []
@@ -419,8 +415,6 @@ def _load_user_items(
     all_items = dedupe(
         *issue_lists.values(),
         *mr_lists.values(),
-        subscribed,
-        reacted,
         issues_labeled,
         mrs_labeled,
     )
@@ -429,8 +423,6 @@ def _load_user_items(
         "all_items": all_items,
         "issue_lists": issue_lists,
         "mr_lists": mr_lists,
-        "subscribed": subscribed,
-        "reacted": reacted,
         "key_to_reasons": key_to_reasons,
         "key_to_reason_details": key_to_reason_details,
         "fetched_at": _now_iso(),
@@ -804,16 +796,6 @@ def _compute_summary(
         "total": len(all_items),
         "issues": total_issues,
         "mrs": total_mrs,
-        "by_relation": by_rel,
-        "by_relation_counts": by_relation_counts,
-        "by_project": by_proj,
-        "most_recent": most_recent,
-    }
-    return {
-        "total": len(all_items),
-        "issues": len(issues),
-        "mrs": len(mrs),
-        "projects": len(items_by_proj),
         "by_relation": by_rel,
         "by_relation_counts": by_relation_counts,
         "by_project": by_proj,

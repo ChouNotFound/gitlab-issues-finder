@@ -7,10 +7,10 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlparse
 
-from gitlab_issues_finder.client import GitlabClient
 import pytest
 import responses
 
+from gitlab_issues_finder.client import GitlabClient
 from gitlab_issues_finder.queries import (
     EXTRA_REACTION,
     EXTRA_SUBSCRIBED,
