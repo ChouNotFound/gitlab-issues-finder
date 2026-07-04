@@ -972,13 +972,98 @@ table.data-table {
 }
 
 /* ===== Responsive ===== */
+
+
+/* ===== Responsive =====
+   三档断点:
+     >= 1024px : 完整双列 (260px sidebar + 1fr main)
+     720-1023px: 窄双列 (220px sidebar + 1fr main)
+     <  720px  : 抽屉式 — sidebar 默认隐藏, 顶部汉堡按钮唤起 overlay 抽屉
+*/
+.nav-toggle {
+    display: none;
+    background: transparent;
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius);
+    padding: 6px 10px;
+    color: var(--c-text);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.nav-toggle:hover {
+    background: var(--c-bg-hover);
+    border-color: var(--c-border-strong);
+}
+
+.sidebar-scrim {
+    display: none;
+}
+
+@media (max-width: 1023px) {
+    .console-layout { grid-template-columns: 220px 1fr; }
+}
+
 @media (max-width: 720px) {
-    .topbar { padding: 0 12px; gap: 8px; }
-    .nav-tabs { margin-left: 4px; }
+    .topbar { padding: 0 12px; gap: 8px; height: 52px; }
     .nav-tab { padding: 14px 8px; font-size: 13px; }
-    .board-toolbar { padding: 12px; }
-    .kanban { padding: 12px; }
+    .nav-toggle { display: inline-flex; align-items: center; gap: 4px; }
+    .nav-tabs { margin-left: 4px; }
+
+    .console-layout { grid-template-columns: 1fr; }
+
+    /* Sidebar 变抽屉: 默认在视口左侧外, .open 时滑入 */
+    .console-sidebar {
+        position: fixed;
+        top: 52px;
+        left: 0;
+        bottom: 0;
+        width: min(280px, 85vw);
+        z-index: 90;
+        border-right: 1px solid var(--c-border);
+        transform: translateX(-100%);
+        transition: transform 0.2s ease;
+        box-shadow: var(--shadow-lg);
+    }
+    .console-sidebar.open { transform: translateX(0); }
+
+    .sidebar-scrim {
+        display: block;
+        position: fixed;
+        inset: 52px 0 0 0;
+        background: rgba(0, 0, 0, 0.4);
+        z-index: 89;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+    }
+    .sidebar-scrim.open { opacity: 1; pointer-events: auto; }
+
+    /* Kanban 列: 320px 起步, 横向滚动 */
+    .kanban { padding: 12px; gap: 10px; }
+    .kanban-col { flex: 1 0 320px; min-width: 320px; }
+
+    /* 表格: 横向滚动, 优先列保留 */
+    .table-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .data-table th, .data-table td { padding: 8px 10px; }
+
+    /* 卡片 / KPI 网格: 自动单列 */
+    .console-panels { grid-template-columns: 1fr; gap: 12px; }
+    .kpi-grid { grid-template-columns: 1fr 1fr; }
+
+    /* 工具栏: 折行 */
+    .console-header { gap: 8px; }
+    .console-tools { flex-wrap: wrap; }
+
+    /* Home card: 缩小留白 */
+    .home-card { padding: 24px 20px; }
+    .home-title { font-size: 22px; }
+    .home-subtitle { font-size: 13px; }
+
+    /* Stat row: 横向滚动 */
+    .stat-row { overflow-x: auto; flex-wrap: nowrap; padding: 12px; }
+    .stat-group { flex-shrink: 0; }
 }
 
 /* ===== Modal ===== */
@@ -1038,10 +1123,7 @@ table.data-table {
     min-height: 0;
 }
 
-@media (max-width: 720px) {
-    .console-layout { grid-template-columns: 1fr; }
-    .console-sidebar { display: none; }
-}
+
 
 .console-sidebar {
     background: var(--c-bg-elev);
@@ -1211,9 +1293,7 @@ table.data-table {
     white-space: nowrap;
 }
 
-@media (max-width: 720px) {
-    .console-main { padding: 16px; }
-}
+
 
 /* Stat Row (per-dimension pills) */
 .stat-row {

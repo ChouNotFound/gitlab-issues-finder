@@ -7,6 +7,13 @@
     </div>
 </div>
 <header class="topbar">
+    {% if active_tab == "board" %}
+    <button type="button" class="nav-toggle" id="sidebar-toggle"
+            aria-label="切换视图导航" aria-controls="console-sidebar" aria-expanded="false">
+        <span aria-hidden="true">☰</span>
+        <span class="nav-toggle-label">视图</span>
+    </button>
+    {% endif %}
     <div class="brand">
         <span class="brand-mark">G</span>
         <span>Status Board</span>

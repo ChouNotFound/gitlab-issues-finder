@@ -359,6 +359,52 @@ class TestIndexRoute:
         assert "showLoading" in resp.text
         assert "data-loading-text" in resp.text
 
+
+class TestResponsive:
+    """验证响应式布局的核心元素存在, 在窄屏上 sidebar 不再消失。"""
+
+    @responses.activate
+    def test_board_renders_sidebar_with_id(self, client, monkeypatch, tmp_db):
+        """/board 应渲染带 id 的 sidebar + scrim + hamburger 按钮。"""
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.test")
+        monkeypatch.setenv("GITLAB_TOKEN", "x")
+        for _ in range(3):
+            responses.add(
+                responses.GET, f"{API_BASE}/issues", json=[], status=200,
+                match_querystring=False,
+            )
+        for _ in range(2):
+            responses.add(
+                responses.GET, f"{API_BASE}/merge_requests", json=[],
+                status=200, match_querystring=False,
+            )
+        resp = client.get("/board?username=alice")
+        assert resp.status_code == 200
+        assert 'id="console-sidebar"' in resp.text
+        assert 'id="sidebar-scrim"' in resp.text
+        assert 'id="sidebar-toggle"' in resp.text
+        assert 'aria-controls="console-sidebar"' in resp.text
+
+    @responses.activate
+    def test_index_no_sidebar_toggle(self, client, monkeypatch, tmp_db):
+        """首页不应渲染 sidebar 切换按钮 (没有 sidebar 可切)。"""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert 'id="sidebar-toggle"' not in resp.text
+
+    def test_css_has_three_breakpoints(self):
+        """CSS 至少覆盖 720 / 1023 两个断点。"""
+        css_path = "src/gitlab_issues_finder/static/style.css"
+        with open(css_path, encoding="utf-8") as f:
+            css = f.read()
+        assert "max-width: 1023px" in css
+        assert "max-width: 720px" in css
+        # 新增的 drawer / scrim 样式
+        assert ".sidebar-scrim" in css
+        assert ".console-sidebar.open" in css
+        # 旧行为 (display: none) 不应再出现
+        assert ".console-sidebar { display: none" not in css
+
     def test_board_no_username_redirects_to_home(self, client, tmp_db):
         """/board 不带 username 应 307 到 / (单一 home URL)。"""
         resp = client.get("/board", follow_redirects=False)

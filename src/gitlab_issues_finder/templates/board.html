@@ -16,8 +16,9 @@
 
         
 
+        <div class="sidebar-scrim" id="sidebar-scrim" aria-hidden="true"></div>
         <div class="console-layout">
-            <aside class="console-sidebar" aria-label="视图导航">
+            <aside class="console-sidebar" id="console-sidebar" aria-label="视图导航">
                 <div class="sidebar-header">
                     <h2 class="sidebar-title">控制台</h2>
                     <p class="sidebar-username">@{{ username }}</p>
@@ -386,6 +387,31 @@
 {% if username and view != 'summary' %}
 <script>
 (function () {
+    // 窄屏侧栏抽屉切换
+    const toggle = document.getElementById('sidebar-toggle');
+    const sidebar = document.getElementById('console-sidebar');
+    const scrim = document.getElementById('sidebar-scrim');
+    if (toggle && sidebar && scrim) {
+        const setOpen = (open) => {
+            sidebar.classList.toggle('open', open);
+            scrim.classList.toggle('open', open);
+            toggle.setAttribute('aria-expanded', String(open));
+            document.body.style.overflow = open ? 'hidden' : '';
+        };
+        toggle.addEventListener('click', () => {
+            setOpen(!sidebar.classList.contains('open'));
+        });
+        scrim.addEventListener('click', () => setOpen(false));
+        // 点 sidebar 内任何链接后自动关闭 (窄屏体验)
+        sidebar.addEventListener('click', (e) => {
+            if (e.target.closest('a')) setOpen(false);
+        });
+        // ESC 关闭
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && sidebar.classList.contains('open')) setOpen(false);
+        });
+    }
+
     const filterEl = document.getElementById('card-filter');
     const sortEl = document.getElementById('card-sort');
     if (!filterEl || !sortEl) return;
