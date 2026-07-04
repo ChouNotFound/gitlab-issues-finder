@@ -11,7 +11,15 @@ class AppError(Exception):
 
 
 class ConfigError(AppError):
-    """配置缺失或非法（如缺少 GITLAB_URL / GITLAB_TOKEN）。"""
+    """配置缺失或非法 (如缺少 GITLAB_URL / GITLAB_TOKEN)。
+
+    可选 ``hint`` 属性: 触发该错误的修复建议, 启动器会优先展示。
+    """
+    hint: str | None = None
+
+    def __init__(self, message: str, hint: str | None = None) -> None:
+        super().__init__(message)
+        self.hint = hint
 
 
 class AuthError(AppError):

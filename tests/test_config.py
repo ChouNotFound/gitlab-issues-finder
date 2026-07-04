@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from gitlab_issues_finder.config import AppConfig, _parse_ssl
@@ -173,3 +175,87 @@ class TestAppSettingsDirect:
         assert cfg.ssl_verify is False
         assert cfg.web_port == 9999
         assert cfg.page_size == 50
+
+
+class TestConfigErrorHint:
+    """ConfigError.hint 字段: 给启动器展示修复建议。"""
+
+    def test_hint_default_is_none(self):
+        from gitlab_issues_finder.errors import ConfigError
+        e = ConfigError("test")
+        assert e.hint is None
+        assert str(e) == "test"
+
+    def test_hint_can_be_set(self):
+        from gitlab_issues_finder.errors import ConfigError
+        e = ConfigError("test", hint="do X")
+        assert e.hint == "do X"
+
+
+class TestMainEntryConfigError:
+    """__main__.main: 启动时 ConfigError 给清晰文案 + 退出码 2。"""
+
+    def test_missing_url_prints_friendly_message(self, monkeypatch, capsys):
+        from gitlab_issues_finder import __main__ as m
+        from gitlab_issues_finder.errors import ConfigError
+        # 直接 patch AppConfig.from_env 抛 ConfigError, 绕过 pydantic-settings
+        @staticmethod
+        def _fake():
+            raise ConfigError(
+                "GITLAB_URL 未设置",
+                hint="在 .env 中设置 GITLAB_URL=https://gitlab.example.com",
+            )
+        monkeypatch.setattr(m, "AppConfig", type("A", (), {"from_env": _fake}))
+        monkeypatch.setattr(sys, "argv", ["gif"])
+        with pytest.raises(SystemExit) as exc_info:
+            m.main()
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        assert "配置错误" in captured.err
+        assert "GITLAB_URL" in captured.err
+
+    def test_missing_token_prints_hint(self, monkeypatch, capsys):
+        from gitlab_issues_finder import __main__ as m
+        from gitlab_issues_finder.errors import ConfigError
+        @staticmethod
+        def _fake():
+            raise ConfigError(
+                "GITLAB_TOKEN 未设置",
+                hint="在 .env 中设置 GITLAB_TOKEN=glpat-xxx (read_api scope)",
+            )
+        monkeypatch.setattr(m, "AppConfig", type("A", (), {"from_env": _fake}))
+        monkeypatch.setattr(sys, "argv", ["gif"])
+        with pytest.raises(SystemExit) as exc_info:
+            m.main()
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        assert "GITLAB_TOKEN" in captured.err
+        assert "read_api" in captured.err
+
+    def test_falls_back_to_generic_hint_when_no_hint_attr(self, monkeypatch, capsys):
+        """``getattr(e, 'hint', None)`` 兜底: 即便 hint 未设也不抛 AttributeError。"""
+        from gitlab_issues_finder import __main__ as m
+        from gitlab_issues_finder.errors import ConfigError
+        monkeypatch.setattr(sys, "argv", ["gif"])
+        # 直接 patch from_env 抛 ConfigError(无 hint)
+        class _A:
+            @staticmethod
+            def from_env():
+                raise ConfigError("boom")
+        monkeypatch.setattr(m, "AppConfig", _A)
+        with pytest.raises(SystemExit) as exc_info:
+            m.main()
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        # 无 hint 时打印通用提示
+        assert "复制 .env.example" in captured.err
+
+    def test_version_flag_skips_config(self, monkeypatch, capsys):
+        """--version 不应读 .env, 也不应抛 ConfigError。"""
+        from gitlab_issues_finder import __main__ as m
+        monkeypatch.delenv("GITLAB_URL", raising=False)
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.setattr(sys, "argv", ["gif", "--version"])
+        m.main()  # 不应抛
+        captured = capsys.readouterr()
+        assert "gitlab-issues-finder" in captured.out

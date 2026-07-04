@@ -99,11 +99,13 @@ class AppSettings(BaseSettings):
     def _check_required(self) -> AppSettings:
         if not self.gitlab_url:
             raise ConfigError(
-                "GITLAB_URL 未设置。请在 .env 文件或环境变量中配置。参考 .env.example。"
+                "GITLAB_URL 未设置",
+                hint="在 .env 中设置 GITLAB_URL=https://gitlab.your-company.com (参考 .env.example)",
             )
         if not self.gitlab_token:
             raise ConfigError(
-                "GITLAB_TOKEN 未设置。请在 .env 文件或环境变量中配置。Token 需要 read_api scope。"
+                "GITLAB_TOKEN 未设置",
+                hint="在 .env 中设置 GITLAB_TOKEN=glpat-xxxxxxxxxxxx (Token 需要 read_api scope)",
             )
         return self
 
