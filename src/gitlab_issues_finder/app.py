@@ -510,9 +510,9 @@ async def search(
       - MR：reviewer_username / assignee_username；
       - labels 是可选附加条件（AND 多标签）。
     """
-    username = username.strip()
+    username = _validate_username(username)
     if not username:
-        return _render_error(request, "请输入有效的 GitLab 用户名", "输入为空")
+        return _render_error(request, "请输入有效的 GitLab 用户名（仅允许字母/数字/_-.@，长度 1-255）", "输入无效")
 
     label_list = [s.strip() for s in labels.split(",") if s.strip()]
     # 时间范围参数先于 GitLab 调用验证（避免无效参数时仍然跑 7 个 API）
@@ -617,6 +617,13 @@ async def board(
         # 无 username 时统一走 /, 避免 /board 与 / 两套 home 视图。
         # 307 (而非 302) 保留方法, 即便将来该路由支持 POST 也安全。
         return RedirectResponse(url="/", status_code=307)
+    username = _validate_username(username)
+    if not username:
+        return _render_error(
+            request,
+            "用户名包含非法字符或过长（仅允许字母/数字/_-.@，长度 1-255）",
+            "输入无效",
+        )
     dbp = _db_path()
 
     # 验证 view 参数
@@ -908,9 +915,12 @@ async def api_items(
       [{type, iid, project_id, title, state, web_url,
         labels, assignee, updated_at, reasons}, ...]
     """
-    username = username.strip()
+    username = _validate_username(username)
     if not username:
-        raise HTTPException(status_code=400, detail="missing username")
+        raise HTTPException(
+            status_code=400,
+            detail="invalid username: only letters/digits/_-.@ allowed, length 1-255",
+        )
     s_date = _parse_date(since)
     u_date = _parse_date(until)
     if since and not s_date:
