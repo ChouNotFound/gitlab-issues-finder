@@ -21,9 +21,7 @@ import re
 from collections.abc import Iterable, Iterator, Sequence
 from enum import Enum
 
-import gitlab
-
-from gitlab_issues_finder.client import safe_http_get
+from gitlab_issues_finder.client import GitlabClient, safe_http_get
 from gitlab_issues_finder.models import IssueRef
 
 
@@ -85,7 +83,7 @@ _MAX_PAGES = 100
 
 
 def _iter_pages(
-    gl: gitlab.Gitlab,
+    gl: GitlabClient,
     params: dict,
     page_size: int,
     path: str = "/issues",
@@ -124,7 +122,7 @@ def _make_params(query: dict) -> dict:
 
 
 def fetch_items(
-    gl: gitlab.Gitlab,
+    gl: GitlabClient,
     username: str,
     relation: Relation,
     kind: ItemKind,
@@ -145,7 +143,7 @@ def fetch_items(
 
 
 def resolve_user_ids(
-    gl: gitlab.Gitlab,
+    gl: GitlabClient,
     username: str,
     page_size: int = 100,
     max_total: int = 100,
@@ -187,7 +185,7 @@ def resolve_user_ids(
 
 
 def fetch_items_by_user_id(
-    gl: gitlab.Gitlab,
+    gl: GitlabClient,
     user_ids: Sequence[int],
     relation: Relation,
     kind: ItemKind,
@@ -230,7 +228,7 @@ def fetch_items_by_user_id(
 
 
 def fetch_subscribed(
-    gl: gitlab.Gitlab,
+    gl: GitlabClient,
     kind: ItemKind,
     page_size: int = 100,
 ) -> list[IssueRef]:
@@ -247,7 +245,7 @@ def fetch_subscribed(
 
 
 def fetch_reacted(
-    gl: gitlab.Gitlab,
+    gl: GitlabClient,
     emoji: str = REACTION_EMOJI_DEFAULT,
     kind: ItemKind = ItemKind.ISSUE,
     page_size: int = 100,
@@ -265,7 +263,7 @@ def fetch_reacted(
 
 
 def fetch_labeled(
-    gl: gitlab.Gitlab,
+    gl: GitlabClient,
     labels: Sequence[str],
     page_size: int = 100,
     *,
@@ -283,7 +281,7 @@ def fetch_labeled(
 
 
 def fetch_open_issues(
-    gl: gitlab.Gitlab,
+    gl: GitlabClient,
     page_size: int = 100,
 ) -> list[dict]:
     """拉取当前用户可访问范围内的全部 opened issues 原始 payload。
@@ -296,7 +294,7 @@ def fetch_open_issues(
 
 
 def fetch_issue_notes(
-    gl: gitlab.Gitlab,
+    gl: GitlabClient,
     project_id: int,
     issue_iid: int,
     page_size: int = 100,
@@ -338,7 +336,7 @@ def _is_self_authored_note(note: dict, username: str) -> bool:
 
 
 def fetch_issue_low_threshold_items(
-    gl: gitlab.Gitlab,
+    gl: GitlabClient,
     username: str,
     page_size: int = 100,
 ) -> tuple[list[IssueRef], list[IssueRef]]:
@@ -386,7 +384,7 @@ def fetch_issue_low_threshold_items(
     return mentioned, []
 
 
-def fetch_users(gl: gitlab.Gitlab, page_size: int = 100, max_total: int = 200) -> list[dict]:
+def fetch_users(gl: GitlabClient, page_size: int = 100, max_total: int = 200) -> list[dict]:
     """拉取活跃用户列表（用于首页自动补全下拉框）。
 
     返回值是 GitLab API 原始 dict 列表，每项至少包含 id / username / name。
@@ -427,7 +425,7 @@ def dedupe(*lists: Iterable[IssueRef]) -> list[IssueRef]:
 
 
 def resolve_projects(
-    gl: gitlab.Gitlab,
+    gl: GitlabClient,
     project_ids,
     page_size: int = 100,
 ) -> dict:

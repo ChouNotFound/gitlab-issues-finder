@@ -28,7 +28,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-import gitlab
 from fastapi import Body, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -36,7 +35,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gitlab_issues_finder import storage
-from gitlab_issues_finder.client import build_client
+from gitlab_issues_finder.client import GitlabClient, build_client
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import AppError, AuthError, ConfigError
 from gitlab_issues_finder.logging_setup import get_logger
@@ -834,9 +833,11 @@ async def api_me() -> JSONResponse:
     gl = build_client(cfg)
     try:
         me: dict = gl.http_get("/user")  # type: ignore[assignment]
-    except gitlab.exceptions.GitlabError as e:
-        code = getattr(e, "response_code", None)
-        raise AuthError(f"无法获取当前用户：{e} (HTTP {code or '?'})") from e
+    except AuthError:
+        raise  # 已经表达了 token 错误, 直接透传
+    except AppError as e:
+        # 404 / 5xx / 网络问题都映射为 AuthError (因为是 "用 token 验证身份" 失败)
+        raise AuthError(f"无法获取当前用户：{e}") from e
     return JSONResponse(
         {
             "id": me.get("id"),

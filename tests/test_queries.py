@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlparse
 
-import gitlab
+from gitlab_issues_finder.client import GitlabClient
 import pytest
 import responses
 
@@ -66,7 +66,7 @@ def _add_paginated_endpoint(
 
 @pytest.fixture
 def gl():
-    return gitlab.Gitlab(url=GITLAB_URL, private_token="x", api_version="4")
+    return GitlabClient(url=GITLAB_URL, token="x")
 
 
 def _assert_query_param(last_url: str, key: str, value: str) -> None:

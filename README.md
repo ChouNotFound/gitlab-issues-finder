@@ -148,6 +148,17 @@ uvicorn gitlab_issues_finder.app:app --host 127.0.0.1 --port 8000
 | `RATE_LIMIT_RPM` | | `60` | 每 IP 每分钟请求上限；`0` 关闭限流 |
 | `RATE_LIMIT_BURST` | | `=RATE_LIMIT_RPM` | 令牌桶容量 |
 
+## 🧱 技术栈
+
+| 组件 | 选型 | 备注 |
+|---|---|---|
+| Web | FastAPI + uvicorn | |
+| 模板 | Jinja2 (SSR) | 配 66 行 vanilla JS |
+| HTTP | `requests` (直连 GitLab REST) | ~~python-gitlab~~ 已在 0.2.0 移除, 详见 [docs/TECH_STACK.md](docs/TECH_STACK.md) |
+| 存储 | SQLite (stdlib) | |
+| 配置 | pydantic-settings | |
+| 测试 | pytest + `responses` | 250+ 用例 |
+
 ## 🔑 Token 与 username 的关系
 
 仓库按 `username` 拉取 Issue 的 assignee / mention / author，并补扫 opened issues 的标题、描述和评论来识别 `@username`；MR 按 reviewer / assignee 统计。多 assignee / reviewer 场景会先把 username 解析成 user_id，再用 `assignee_id` / `reviewer_id` 补齐。

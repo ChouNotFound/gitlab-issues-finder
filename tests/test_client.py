@@ -1,18 +1,16 @@
 """client.py 单元测试。
 
-注：build_client() 现在不主动调用 auth()，认证错误由 safe_http_get() 在
-第一次实际请求时捕获并映射。AuthError / GitlabUnavailableError / Timeout
-等异常映射的测试覆盖在 safe_http_get 路径上，并通过 test_app.py 端到端验证。
+client.py 现在用 ``requests`` + 自研极简 ``GitlabClient`` 替代 python-gitlab。
+所有测试通过 ``responses`` 拦截底层 ``requests`` 调用。
 """
 
 from __future__ import annotations
 
-import gitlab
 import pytest
 import requests
 import responses
 
-from gitlab_issues_finder.client import build_client, safe_http_get
+from gitlab_issues_finder.client import GitlabClient, build_client, safe_http_get
 from gitlab_issues_finder.config import AppConfig
 from gitlab_issues_finder.errors import (
     AuthError,
@@ -38,142 +36,185 @@ def cfg() -> AppConfig:
     )
 
 
+@pytest.fixture
+def client() -> GitlabClient:
+    return GitlabClient(url="https://gitlab.test", token="x")
+
+
 class TestBuildClient:
     def test_returns_client_without_making_requests(self, cfg):
-        """build_client 不应主动发起任何 HTTP 请求（token 错误延迟暴露）。"""
+        """build_client 不应主动发起任何 HTTP 请求 (token 错误延迟暴露)。"""
         with responses.RequestsMock(assert_all_requests_are_fired=False) as rmock:
             gl = build_client(cfg)
-            assert gl is not None
+            assert isinstance(gl, GitlabClient)
             assert len(rmock.calls) == 0
 
     def test_url_stored(self, cfg):
         gl = build_client(cfg)
-        assert cfg.url in gl._url  # type: ignore[attr-defined]
+        assert gl.url == cfg.url
 
-    def test_token_stored(self, cfg):
+    def test_token_stored_in_session_headers(self, cfg):
         gl = build_client(cfg)
-        assert gl.private_token == cfg.token
+        assert gl.session.headers["PRIVATE-TOKEN"] == cfg.token
+
+    def test_url_trailing_slash_stripped(self, cfg):
+        cfg2 = AppConfig(
+            url="https://gitlab.test/",  # 末尾有 /
+            token="x", ssl_verify=True, timeout=30,
+            web_host="127.0.0.1", web_port=8000, page_size=100,
+        )
+        gl = build_client(cfg2)
+        assert gl.url == "https://gitlab.test"
 
 
 class TestSafeHttpGetErrors:
-    """safe_http_get 把底层异常映射为应用层异常。"""
-
-    @pytest.fixture
-    def gl(self) -> gitlab.Gitlab:
-        return gitlab.Gitlab(url="https://gitlab.test", private_token="x")
+    """http_get 把 HTTP 状态码映射为应用层异常。"""
 
     @responses.activate
-    def test_401_raises_auth_error(self, gl):
+    def test_401_raises_auth_error(self, client):
         responses.add(
-            responses.GET,
-            f"{API_BASE}/user",
-            json={"message": "401 Unauthorized"},
-            status=401,
+            responses.GET, f"{API_BASE}/user",
+            json={"message": "401 Unauthorized"}, status=401,
         )
-        with pytest.raises(AuthError, match="Token 认证失败"):
-            safe_http_get(gl, "/user")
+        with pytest.raises(AuthError, match="401"):
+            client.http_get("/user")
 
     @responses.activate
-    def test_403_raises_auth_error(self, gl):
+    def test_403_raises_auth_error(self, client):
         responses.add(
-            responses.GET,
-            f"{API_BASE}/user",
-            json={"message": "403 Forbidden"},
-            status=403,
+            responses.GET, f"{API_BASE}/user",
+            json={"message": "403 Forbidden"}, status=403,
         )
         with pytest.raises(AuthError, match="访问权限"):
-            safe_http_get(gl, "/user")
+            client.http_get("/user")
 
     @responses.activate
-    def test_500_raises_unavailable(self, gl):
+    def test_404_raises_not_found(self, client):
         responses.add(
-            responses.GET,
-            f"{API_BASE}/user",
-            json={"message": "Internal Server Error"},
-            status=500,
-        )
-        with pytest.raises(GitlabUnavailableError):
-            safe_http_get(gl, "/user")
-
-    @responses.activate
-    def test_404_raises_not_found(self, gl):
-        """404 单独映射为 NotFoundError, 区别于通用 GitlabUnavailableError。"""
-        responses.add(
-            responses.GET,
-            f"{API_BASE}/projects/9999",
-            json={"message": "404 Project Not Found"},
-            status=404,
+            responses.GET, f"{API_BASE}/projects/9999",
+            json={"message": "404 Project Not Found"}, status=404,
         )
         with pytest.raises(NotFoundError, match="404"):
-            safe_http_get(gl, "/projects/9999")
+            client.http_get("/projects/9999")
 
     @responses.activate
-    def test_429_raises_rate_limit(self, gl):
-        """429 映射为 RateLimitError, 不被 python-gitlab 内部 sleep+retry 吞掉。
-
-        这里特意用 ``assert_all_requests_are_fired=False`` 因为我们只注册了
-        一次响应, 期望 429 立刻抛出 (而非 10 次重试)。
-        """
+    def test_429_raises_rate_limit(self, client):
         responses.add(
-            responses.GET,
-            f"{API_BASE}/issues",
-            json={"message": "429 Too Many Requests"},
-            status=429,
+            responses.GET, f"{API_BASE}/issues",
+            json={"message": "429"}, status=429,
         )
         with pytest.raises(RateLimitError, match="限流"):
-            safe_http_get(gl, "/issues")
-        # 验证没有触发重试: 一次响应就抛错
-        assert len(responses.calls) == 1
+            client.http_get("/issues")
 
     @responses.activate
-    def test_timeout_raises_timeout(self, gl):
-        def timeout_callback(request):
-            raise requests.exceptions.Timeout("simulated timeout")
+    def test_500_raises_unavailable(self, client):
+        responses.add(
+            responses.GET, f"{API_BASE}/user",
+            json={"message": "ISE"}, status=500,
+        )
+        with pytest.raises(GitlabUnavailableError):
+            client.http_get("/user")
+
+    @responses.activate
+    def test_502_raises_unavailable(self, client):
+        responses.add(
+            responses.GET, f"{API_BASE}/user",
+            json={"message": "Bad Gateway"}, status=502,
+        )
+        with pytest.raises(GitlabUnavailableError):
+            client.http_get("/user")
+
+    @responses.activate
+    def test_timeout_raises_timeout(self, client):
+        def timeout_cb(request):
+            raise requests.exceptions.Timeout("simulated")
 
         responses.add_callback(
-            responses.GET,
-            f"{API_BASE}/user",
-            callback=timeout_callback,
+            responses.GET, f"{API_BASE}/user", callback=timeout_cb,
         )
         with pytest.raises(GitlabTimeoutError):
-            safe_http_get(gl, "/user")
+            client.http_get("/user")
 
     @responses.activate
-    def test_success(self, gl):
-        responses.add(
-            responses.GET,
-            f"{API_BASE}/issues",
-            json=[{"id": 1}],
-            status=200,
+    def test_ssl_error_raises_unavailable(self, client):
+        def ssl_cb(request):
+            raise requests.exceptions.SSLError("cert verify failed")
+
+        responses.add_callback(
+            responses.GET, f"{API_BASE}/user", callback=ssl_cb,
         )
-        result = safe_http_get(gl, "/issues", page=1, per_page=20)
+        with pytest.raises(GitlabUnavailableError, match="SSL"):
+            client.http_get("/user")
+
+    @responses.activate
+    def test_connection_error_raises_unavailable(self, client):
+        def cb(request):
+            raise requests.exceptions.ConnectionError("refused")
+
+        responses.add_callback(
+            responses.GET, f"{API_BASE}/user", callback=cb,
+        )
+        with pytest.raises(GitlabUnavailableError, match="无法连接"):
+            client.http_get("/user")
+
+    @responses.activate
+    def test_success_returns_json(self, client):
+        responses.add(
+            responses.GET, f"{API_BASE}/issues",
+            json=[{"id": 1}], status=200,
+        )
+        result = client.http_get("/issues", page=1, per_page=20)
+        assert result == [{"id": 1}]
+
+    @responses.activate
+    def test_non_json_response_raises_unavailable(self, client):
+        responses.add(
+            responses.GET, f"{API_BASE}/user",
+            body="<html>not json</html>", status=200,
+        )
+        with pytest.raises(GitlabUnavailableError, match="非 JSON"):
+            client.http_get("/user")
+
+    @responses.activate
+    def test_query_params_passed_through(self, client):
+        """回归: query_data 必须正确拼到 URL 上。"""
+        responses.add(
+            responses.GET, f"{API_BASE}/issues",
+            json=[], status=200, match_querystring=False,
+        )
+        client.http_get("/issues", assignee_username="alice", state="opened")
+        from urllib.parse import parse_qs, urlparse
+        qs = parse_qs(urlparse(responses.calls[0].request.url).query)
+        assert qs["assignee_username"] == ["alice"]
+        assert qs["state"] == ["opened"]
+
+
+class TestSafeHttpGetAlias:
+    """safe_http_get 保留为 GitlabClient.http_get 的别名, 不破坏旧调用方。"""
+
+    @responses.activate
+    def test_safe_http_get_delegates_to_client(self, client):
+        responses.add(
+            responses.GET, f"{API_BASE}/issues",
+            json=[{"id": 1}], status=200,
+        )
+        result = safe_http_get(client, "/issues")
         assert result == [{"id": 1}]
 
 
 class TestSslVerify:
-    def test_ssl_verify_bool(self):
-        cfg = AppConfig(
-            url="https://gl",
-            token="x",
-            ssl_verify=False,
-            timeout=30,
-            web_host="127.0.0.1",
-            web_port=8000,
-            page_size=100,
+    def test_ssl_verify_bool(self, cfg):
+        cfg2 = AppConfig(
+            url="https://gl", token="x", ssl_verify=False, timeout=30,
+            web_host="127.0.0.1", web_port=8000, page_size=100,
         )
-        gl = build_client(cfg)
-        # python-gitlab 4.x 把 ssl_verify 存到自身属性
-        assert gl.ssl_verify is False
+        gl = build_client(cfg2)
+        assert gl.session.verify is False
 
-    def test_ssl_verify_path(self):
-        cfg = AppConfig(
-            url="https://gl",
-            token="x",
-            ssl_verify="/path/to/ca.crt",
-            timeout=30,
-            web_host="127.0.0.1",
-            web_port=8000,
-            page_size=100,
+    def test_ssl_verify_path(self, cfg):
+        cfg2 = AppConfig(
+            url="https://gl", token="x", ssl_verify="/path/to/ca.crt", timeout=30,
+            web_host="127.0.0.1", web_port=8000, page_size=100,
         )
-        gl = build_client(cfg)
-        assert gl.ssl_verify == "/path/to/ca.crt"
+        gl = build_client(cfg2)
+        assert gl.session.verify == "/path/to/ca.crt"
