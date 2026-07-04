@@ -17,12 +17,22 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 
 from gitlab_issues_finder.client import GitlabClient, safe_http_get
+from gitlab_issues_finder.errors import (
+    AuthError,
+    GitlabTimeoutError,
+    GitlabUnavailableError,
+    NotFoundError,
+)
 from gitlab_issues_finder.models import IssueRef
+
+logger = logging.getLogger(__name__)
 
 
 class ItemKind(Enum):
@@ -335,6 +345,84 @@ def _is_self_authored_note(note: dict, username: str) -> bool:
     return author_username == username
 
 
+def _mentioned_via_search(
+    gl: GitlabClient,
+    username: str,
+    page_size: int = 100,
+) -> list[IssueRef] | None:
+    """用 GitLab ``/search`` API 一次拉取所有 @username 命中的 issue。
+
+    返回:
+      - list[IssueRef]: 命中 issue 列表 (去重后)
+      - None: 调用方无权访问 /search (AuthError / NotFoundError), 调用方
+        应回退到旧的 1+N 全 issue 扫描
+
+    设计:
+      - scope=notes: 拉所有评论里 @username 的 notes, 提取 issue 引用
+      - scope=issues: 拉所有 title/description 里 @username 的 issues
+      - 两次调用都做 (并行) 比 N 次 per-issue notes 拉取快得多
+        (100 open issues + 每 issue 5 页 notes: 501 calls -> 2 calls)
+
+    注:
+      - ``/search`` 在某些 GitLab 版本需 admin token, 个人 token
+        走不通时, 调用方会捕获 AuthError/NotFoundError 走 fallback。
+      - GitLab API 自带跨 project 搜索, 替代 N 次 ``/projects/:id/issues/:iid/notes``。
+    """
+    search_query = f"@{username}"
+    issues_by_key: dict[tuple[str, int, int], IssueRef] = {}
+
+    def _search_notes() -> None:
+        for note in _iter_pages(
+            gl, {"scope": "notes", "search": search_query}, page_size, path="/search"
+        ):
+            # notes 返回 ``type=Note``, 挂载的 issue / merge_request 在顶层字段
+            issue_payload = note.get("issue") or {}
+            if not issue_payload:
+                continue
+            iid = issue_payload.get("iid")
+            project_id = issue_payload.get("project_id")
+            if not (iid and project_id):
+                continue
+            # 我们只关心 issue 类型 (不关心 MR)
+            web_url = issue_payload.get("web_url", "")
+            ref = IssueRef(
+                type=ItemKind.ISSUE.type_name,
+                iid=int(iid),
+                project_id=int(project_id),
+                title=str(issue_payload.get("title", "")),
+                state=str(issue_payload.get("state", "opened")),
+                web_url=web_url,
+                labels=list(issue_payload.get("labels", [])),
+                assignee=(
+                    (issue_payload.get("assignee") or {}).get("username")
+                    if isinstance(issue_payload.get("assignee"), dict)
+                    else None
+                ),
+                updated_at=str(issue_payload.get("updated_at", "")),
+            )
+            issues_by_key[ref.key] = ref
+
+    def _search_issues() -> None:
+        for payload in _iter_pages(
+            gl, {"scope": "issues", "search": search_query}, page_size, path="/search"
+        ):
+            iid = payload.get("iid")
+            project_id = payload.get("project_id")
+            if not (iid and project_id):
+                continue
+            ref = IssueRef.from_api(payload, type=ItemKind.ISSUE.type_name)
+            issues_by_key[ref.key] = ref
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_notes = pool.submit(_search_notes)
+        f_issues = pool.submit(_search_issues)
+        # 任一抛 AuthError / NotFoundError 都会向上传播, 调用方据此回退
+        f_notes.result()
+        f_issues.result()
+
+    return list(issues_by_key.values())
+
+
 def fetch_issue_low_threshold_items(
     gl: GitlabClient,
     username: str,
@@ -347,21 +435,43 @@ def fetch_issue_low_threshold_items(
     - mentioned_items：在 title / description / **他人**评论中显式
       ``@`` 到 ``username`` 的 issue 列表。
 
-    注意：
+    性能路径:
+      - 首选 ``/search?scope=notes+issues``: 2 个分页调用, 覆盖整个实例
+      - 回退 (search 需 admin): 旧的 1+N 全 issue 扫描 (N 个 issues
+        每个都拉 notes)
 
-    1. 评论扫描时排除本人发出的 note——避免「我在自己评论里
-       ``@bob``」被错误地算作「``@我``」（这是「@我」维度大量误统
-       计的根因）。
-    2. 第二个返回值仅为兼容旧调用方保留；本人回复不再属于默认
-       参与度口径。
-    3. title / description 不按作者过滤：若用户自己创建了一个
-       issue 并在 description 中 ``@他人``，GitLab API 层无法
-       区分「自创引用」与「他人 ``@`` 我」，目前保留现状。如有
-       强烈需求可在 product 上明确说明。
+    行为契约 (不变):
+      1. 评论扫描时排除本人发出的 note——避免「我在自己评论里
+         ``@bob``」被错误地算作「``@我``」（这是「@我」维度大量误统
+         计的根因）。
+      2. 第二个返回值仅为兼容旧调用方保留；本人回复不再属于默认
+         参与度口径。
+      3. title / description 不按作者过滤：若用户自己创建了一个
+         issue 并在 description 中 ``@他人``，GitLab API 层无法
+         区分「自创引用」与「他人 ``@`` 我」，目前保留现状。如有
+         强烈需求可在 product 上明确说明。
     """
     if not username:
         return [], []
+    if not username:
+        return [], []
 
+    # ---- 路径 1: /search (admin 范围, 2 个分页调用) ----
+    try:
+        mentioned = _mentioned_via_search(gl, username, page_size) or []
+        return mentioned, []
+    except (AuthError, NotFoundError, GitlabUnavailableError) as e:
+        # /search 在某些 GitLab 版本需 admin, 个人 token 走不通时
+        # AuthError (401/403) 或 NotFoundError (404) 都被 GitLab 端返
+        # 回; 5xx 也都回退到 N+1 路径, 永远不让主流程失败
+        logger.debug(
+            "search-based mention detection unavailable, falling back: %s", e
+        )
+    except GitlabTimeoutError:
+        # 超时也别卡主流程
+        logger.debug("mention detection timed out, falling back to N+1")
+
+    # ---- 路径 2: 1+N 全 issue 扫描 (N 个 issues 每个都拉 notes) ----
     mention_re = _mention_regex(username)
     mentioned: list[IssueRef] = []
     for payload in fetch_open_issues(gl, page_size):

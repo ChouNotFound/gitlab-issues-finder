@@ -1,8 +1,6 @@
 """queries.py 单元测试。
-
 使用 responses 拦截 python-gitlab 内部 HTTP 请求，回放 fixture。
 """
-
 from __future__ import annotations
 
 from urllib.parse import parse_qs, urlparse
@@ -34,8 +32,6 @@ from tests.conftest import load_fixture
 
 GITLAB_URL = "https://gitlab.test"
 API_BASE = f"{GITLAB_URL}/api/v4"
-
-
 def _add_user_endpoint(responses_mock: responses.RequestsMock) -> None:
     responses_mock.add(
         responses.GET,
@@ -43,8 +39,6 @@ def _add_user_endpoint(responses_mock: responses.RequestsMock) -> None:
         json={"id": 1, "username": "me"},
         status=200,
     )
-
-
 def _add_paginated_endpoint(
     responses_mock: responses.RequestsMock,
     path: str,
@@ -62,22 +56,15 @@ def _add_paginated_endpoint(
             match_querystring=False,
         )
     return urls
-
-
 @pytest.fixture
 def gl():
     return GitlabClient(url=GITLAB_URL, token="x")
-
-
 def _assert_query_param(last_url: str, key: str, value: str) -> None:
     qs = parse_qs(urlparse(last_url).query)
     assert qs[key] == [value], f"expected qs[{key}]={value!r}, got {qs.get(key)}"
     assert qs["state"] == ["opened"]
-
-
 class TestIssueDimensionQueries:
     """issue 三个参与维度的参数路由正确性。"""
-
     @responses.activate
     def test_fetch_issues_by_assignee(self, gl):
         _add_user_endpoint(responses)
@@ -85,7 +72,6 @@ class TestIssueDimensionQueries:
         result = fetch_items(gl, "alice", Relation.ASSIGNEE, ItemKind.ISSUE)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "assignee_username", "alice")
-
     @responses.activate
     def test_fetch_issues_by_mention(self, gl):
         _add_user_endpoint(responses)
@@ -93,7 +79,6 @@ class TestIssueDimensionQueries:
         result = fetch_items(gl, "alice", Relation.MENTION, ItemKind.ISSUE)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "mention_username", "alice")
-
     @responses.activate
     def test_fetch_issues_by_author(self, gl):
         _add_user_endpoint(responses)
@@ -101,7 +86,6 @@ class TestIssueDimensionQueries:
         result = fetch_items(gl, "alice", Relation.AUTHOR, ItemKind.ISSUE)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "author_username", "alice")
-
     @pytest.mark.parametrize(
         "relation,param",
         [
@@ -113,7 +97,6 @@ class TestIssueDimensionQueries:
     @responses.activate
     def test_issue_endpoint_passes_with_membership_false(self, gl, relation, param):
         """关键回归：所有 issue 维度查询都必须传 with_membership=false。
-
         否则用户被指派但不是项目成员时，GitLab 会按 membership 限定范围，
         导致"项目里明明给我派了活但查不到"的 bug。
         """
@@ -123,11 +106,8 @@ class TestIssueDimensionQueries:
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs.get("with_membership") == ["false"]
         assert last_qs.get(param) == ["alice"]
-
-
 class TestMergeRequestDimensionQueries:
     """MR 四个参与维度的参数路由正确性。"""
-
     @responses.activate
     def test_fetch_merge_requests_by_assignee(self, gl):
         _add_user_endpoint(responses)
@@ -135,7 +115,6 @@ class TestMergeRequestDimensionQueries:
         result = fetch_items(gl, "alice", Relation.ASSIGNEE, ItemKind.MERGE_REQUEST)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "assignee_username", "alice")
-
     @responses.activate
     def test_fetch_merge_requests_by_mention(self, gl):
         _add_user_endpoint(responses)
@@ -143,7 +122,6 @@ class TestMergeRequestDimensionQueries:
         result = fetch_items(gl, "alice", Relation.MENTION, ItemKind.MERGE_REQUEST)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "mention_username", "alice")
-
     @responses.activate
     def test_fetch_merge_requests_by_author(self, gl):
         _add_user_endpoint(responses)
@@ -151,7 +129,6 @@ class TestMergeRequestDimensionQueries:
         result = fetch_items(gl, "alice", Relation.AUTHOR, ItemKind.MERGE_REQUEST)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "author_username", "alice")
-
     @responses.activate
     def test_fetch_merge_requests_by_reviewer(self, gl):
         _add_user_endpoint(responses)
@@ -159,8 +136,6 @@ class TestMergeRequestDimensionQueries:
         result = fetch_items(gl, "alice", Relation.REVIEWER, ItemKind.MERGE_REQUEST)
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "reviewer_username", "alice")
-
-
 class TestFetchLabeled:
     @responses.activate
     def test_single_label(self, gl):
@@ -169,15 +144,12 @@ class TestFetchLabeled:
         result = fetch_labeled(gl, ["alice"])
         assert len(result) == 2
         _assert_query_param(responses.calls[-1].request.url, "labels", "alice")
-
     @responses.activate
     def test_multi_labels(self, gl):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/issues", [[]])
         fetch_labeled(gl, ["bug", "priority::high"])
         _assert_query_param(responses.calls[-1].request.url, "labels", "bug,priority::high")
-
-
 class TestIssueLowThresholdQueries:
     @responses.activate
     def test_fetch_open_issues_uses_scope_all(self, gl):
@@ -188,7 +160,6 @@ class TestIssueLowThresholdQueries:
         assert last_qs["scope"] == ["all"]
         assert last_qs["state"] == ["opened"]
         assert last_qs["with_membership"] == ["false"]
-
     @responses.activate
     def test_fetch_issue_notes_only_comments(self, gl):
         responses.add(
@@ -204,7 +175,6 @@ class TestIssueLowThresholdQueries:
         assert last_qs["activity_filter"] == ["only_comments"]
         assert last_qs["sort"] == ["asc"]
         assert last_qs["order_by"] == ["updated_at"]
-
     @responses.activate
     def test_fetch_issue_low_threshold_items(self, gl):
         _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_opened.json")])
@@ -225,11 +195,9 @@ class TestIssueLowThresholdQueries:
         mentioned, replied = fetch_issue_low_threshold_items(gl, "alice")
         assert [(it.project_id, it.iid) for it in mentioned] == [(201, 7)]
         assert replied == []
-
     @responses.activate
     def test_low_threshold_excludes_self_authored_note(self, gl):
         """Bug #1 回归：自己评论里 @ 他人不算「@我」。
-
         查询 alice；alice 在某 issue 评论里 @bob。该 issue 不应在
         alice 的 mentioned 列表中（否则 bob 的「@我」会被污染，反
         之亦然）。
@@ -258,7 +226,6 @@ class TestIssueLowThresholdQueries:
         mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
         # alice 自己 @bob 不算 alice 被 @ -> 不应在结果中
         assert mentioned == []
-
     @responses.activate
     def test_low_threshold_is_case_sensitive(self, gl):
         """Bug #2 回归：GitLab 用户名区分大小写，@Bob 不应误命中 bob 查询。"""
@@ -287,7 +254,6 @@ class TestIssueLowThresholdQueries:
         # 不需要走 note 路径：title/desc 触发，但移除 IGNORECASE 后应不再命中
         mentioned, _ = fetch_issue_low_threshold_items(gl, "bob")
         assert mentioned == []
-
     @responses.activate
     def test_low_threshold_skips_note_with_missing_author(self, gl):
         """健壮性：note 缺 author 字段时不应抛异常，应保守视为他人评论。"""
@@ -325,8 +291,150 @@ class TestIssueLowThresholdQueries:
         # author 缺失视为「非本人」，因此 note 中的 @alice 仍应命中
         assert len(mentioned) == 1
         assert (mentioned[0].project_id, mentioned[0].iid) == (205, 11)
-
-
+class TestMentionedViaSearch:
+    """N+1 修复: 2 个 /search 分页调用替代 N 次 per-issue notes 拉取。"""
+    @responses.activate
+    def test_search_path_used_when_endpoint_available(self, gl):
+        """注册 /search 响应后, fetch_issue_low_threshold_items 走 search 路径。"""
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/search",
+            json=[{
+                "id": 9001,
+                "type": "Note",
+                "body": "@alice ping",
+                "issue": {
+                    "iid": 7,
+                    "project_id": 201,
+                    "title": "Issue from search",
+                    "state": "opened",
+                    "labels": ["bug"],
+                    "web_url": "https://gl/x/y/-/issues/7",
+                    "updated_at": "2026-07-03T00:00:00Z",
+                },
+            }],
+            status=200,
+            match_querystring=False,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/search",
+            json=[{
+                "id": 201,
+                "iid": 7,
+                "project_id": 201,
+                "title": "Issue from search",
+                "state": "opened",
+                "labels": ["bug"],
+                "web_url": "https://gl/x/y/-/issues/7",
+                "updated_at": "2026-07-03T00:00:00Z",
+            }],
+            status=200,
+            match_querystring=False,
+        )
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
+        assert len(mentioned) == 1
+        assert (mentioned[0].project_id, mentioned[0].iid) == (201, 7)
+        for call in responses.calls:
+            url = call.request.url
+            assert "/search" in url or "/api/v4/user" in url, (
+                f"未走 fallback 时只该调 /search: {url}"
+            )
+    @responses.activate
+    def test_search_404_falls_back_to_n_plus_1(self, gl):
+        """/search 返 404 (非 admin token) 时, 回退到旧的 1+N 全 issue 扫描。"""
+        responses.add(
+            responses.GET, f"{API_BASE}/search",
+            json={"message": "404 Not Found"}, status=404,
+            match_querystring=False,
+        )
+        _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_opened.json")])
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/201/issues/7/notes",
+            json=load_fixture("issue_notes_mentioned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/202/issues/8/notes",
+            json=load_fixture("issue_notes_replied.json"),
+            status=200,
+            match_querystring=False,
+        )
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
+        assert [(it.project_id, it.iid) for it in mentioned] == [(201, 7)]
+    @responses.activate
+    def test_search_403_falls_back_to_n_plus_1(self, gl):
+        """/search 返 403 (admin required) 时, 也走 fallback。"""
+        responses.add(
+            responses.GET, f"{API_BASE}/search",
+            json={"message": "403 Forbidden"}, status=403,
+            match_querystring=False,
+        )
+        _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_opened.json")])
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/201/issues/7/notes",
+            json=load_fixture("issue_notes_mentioned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/202/issues/8/notes",
+            json=load_fixture("issue_notes_replied.json"),
+            status=200,
+            match_querystring=False,
+        )
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
+        assert [(it.project_id, it.iid) for it in mentioned] == [(201, 7)]
+    @responses.activate
+    def test_search_500_falls_back_to_n_plus_1(self, gl):
+        """/search 5xx 也不应让主流程失败, 走 fallback。"""
+        responses.add(
+            responses.GET, f"{API_BASE}/search",
+            json={"message": "ISE"}, status=500,
+            match_querystring=False,
+        )
+        _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_opened.json")])
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/201/issues/7/notes",
+            json=load_fixture("issue_notes_mentioned.json"),
+            status=200,
+            match_querystring=False,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/projects/202/issues/8/notes",
+            json=load_fixture("issue_notes_replied.json"),
+            status=200,
+            match_querystring=False,
+        )
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
+        assert [(it.project_id, it.iid) for it in mentioned] == [(201, 7)]
+    @responses.activate
+    def test_search_skips_notes_without_issue(self, gl):
+        """/search?scope=notes 返回的 note 若没挂 issue 字段, 应跳过。"""
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/search",
+            json=[{"id": 9001, "type": "Note", "body": "@alice"}],
+            status=200,
+            match_querystring=False,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/search",
+            json=[],
+            status=200,
+            match_querystring=False,
+        )
+        _add_paginated_endpoint(responses, "/issues", [[]])
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
+        assert mentioned == []
 class TestFetchMergeRequestsByLabels:
     @responses.activate
     def test_labels_passed_as_csv(self, gl):
@@ -335,12 +443,9 @@ class TestFetchMergeRequestsByLabels:
         result = fetch_labeled(gl, ["bug", "priority::high"], kind=ItemKind.MERGE_REQUEST)
         assert all(it.type == "merge_request" for it in result)
         _assert_query_param(responses.calls[-1].request.url, "labels", "bug,priority::high")
-
-
 class TestDedupe:
     def test_no_overlap(self):
         from gitlab_issues_finder.models import IssueRef
-
         a = IssueRef.from_api(
             {
                 "project_id": 1,
@@ -369,10 +474,8 @@ class TestDedupe:
         assert len(result) == 2
         assert result[0].key == ("issue", 1, 1)
         assert result[1].key == ("issue", 2, 1)
-
     def test_full_overlap(self):
         from gitlab_issues_finder.models import IssueRef
-
         a = IssueRef.from_api(
             {
                 "project_id": 1,
@@ -400,10 +503,8 @@ class TestDedupe:
         result = dedupe([a], [b])
         assert len(result) == 1
         assert result[0].title == "a"
-
     def test_partial_overlap(self):
         from gitlab_issues_finder.models import IssueRef
-
         a = IssueRef.from_api(
             {
                 "project_id": 1,
@@ -443,10 +544,8 @@ class TestDedupe:
         result = dedupe([a], [b, c])
         assert len(result) == 2
         assert [it.iid for it in result] == [1, 2]
-
     def test_cross_type_same_iid_not_deduplicated(self):
         from gitlab_issues_finder.models import IssueRef
-
         issue = IssueRef.from_api(
             {
                 "project_id": 1,
@@ -476,10 +575,8 @@ class TestDedupe:
         result = dedupe([issue], [mr])
         assert len(result) == 2
         assert {it.type for it in result} == {"issue", "merge_request"}
-
     def test_same_type_overlap_still_dedupes(self):
         from gitlab_issues_finder.models import IssueRef
-
         a = IssueRef.from_api(
             {
                 "project_id": 7,
@@ -507,12 +604,9 @@ class TestDedupe:
             type="merge_request",
         )
         assert len(dedupe([a], [b])) == 1
-
     def test_empty(self):
         assert dedupe() == []
         assert dedupe([], []) == []
-
-
 class TestFetchUsers:
     @responses.activate
     def test_single_page(self, gl):
@@ -529,12 +623,10 @@ class TestFetchUsers:
         result = fetch_users(gl, page_size=100, max_total=200)
         assert len(result) == 2
         assert result[0]["username"] == "alice"
-
         last_url = responses.calls[-1].request.url
         qs = parse_qs(urlparse(last_url).query)
         assert qs["active"] == ["true"]
         assert qs["without_project_bots"] == ["true"]
-
     @responses.activate
     def test_respects_max_total(self, gl):
         page1 = [{"id": i, "username": f"u{i}", "name": f"U{i}"} for i in range(1, 101)]
@@ -543,7 +635,6 @@ class TestFetchUsers:
         responses.add(responses.GET, f"{API_BASE}/users", json=page1, status=200)
         responses.add(responses.GET, f"{API_BASE}/users", json=page2, status=200)
         responses.add(responses.GET, f"{API_BASE}/users", json=page3, status=200)
-
         result = fetch_users(gl, page_size=100, max_total=150)
         assert len(result) == 150
         users_calls = [
@@ -552,17 +643,13 @@ class TestFetchUsers:
             if "/users?" in c.request.url or c.request.url.endswith("/users")
         ]
         assert len(users_calls) == 2
-
     @responses.activate
     def test_empty(self, gl):
         responses.add(responses.GET, f"{API_BASE}/users", json=[], status=200)
         result = fetch_users(gl)
         assert result == []
-
-
 class TestFetchItemsFactory:
     """验证新的 fetch_items() 工厂：参数路由、错误边界。"""
-
     @responses.activate
     @pytest.mark.parametrize(
         "relation,param",
@@ -578,7 +665,6 @@ class TestFetchItemsFactory:
         result = fetch_items(gl, "alice", relation, ItemKind.ISSUE)
         assert all(it.type == "issue" for it in result)
         _assert_query_param(responses.calls[-1].request.url, param, "alice")
-
     @responses.activate
     @pytest.mark.parametrize(
         "relation,param",
@@ -595,12 +681,10 @@ class TestFetchItemsFactory:
         result = fetch_items(gl, "alice", relation, ItemKind.MERGE_REQUEST)
         assert all(it.type == "merge_request" for it in result)
         _assert_query_param(responses.calls[-1].request.url, param, "alice")
-
     def test_reviewer_relation_rejected_for_issue(self, gl):
         """reviewer_username 在 GitLab API 中只适用于 MR。"""
         with __import__("pytest").raises(ValueError, match="not valid for kind"):
             fetch_items(gl, "alice", Relation.REVIEWER, ItemKind.ISSUE)
-
     @responses.activate
     def test_fetch_items_always_passes_with_membership_false(self, gl):
         _add_user_endpoint(responses)
@@ -609,7 +693,6 @@ class TestFetchItemsFactory:
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs.get("with_membership") == ["false"]
         assert last_qs.get("scope") == ["all"]
-
     @responses.activate
     @pytest.mark.parametrize(
         "relation,param",
@@ -626,29 +709,22 @@ class TestFetchItemsFactory:
         assert last_qs[param] == ["alice"]
         assert last_qs["scope"] == ["all"]
         assert last_qs["with_membership"] == ["false"]
-
-
 class TestFetchLabeledKind:
     """fetch_labeled() 的 kind 参数切换 issue / MR 端点。"""
-
     @responses.activate
     def test_labeled_issue_default(self, gl):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/issues", [load_fixture("issues_labeled.json")])
         result = fetch_labeled(gl, ["bug"], 100)
         assert all(it.type == "issue" for it in result)
-
     @responses.activate
     def test_labeled_merge_request(self, gl):
         _add_user_endpoint(responses)
         _add_paginated_endpoint(responses, "/merge_requests", [load_fixture("mr_labeled.json")])
         result = fetch_labeled(gl, ["bug"], 100, kind=ItemKind.MERGE_REQUEST)
         assert all(it.type == "merge_request" for it in result)
-
-
 class TestResolveUserIds:
     """username -> [user_id, ...] via /users?username=X."""
-
     @responses.activate
     def test_single_user(self, gl):
         responses.add(
@@ -662,7 +738,6 @@ class TestResolveUserIds:
         assert result == [42]
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs["username"] == ["alice"]
-
     @responses.activate
     def test_multiple_accounts_same_username(self, gl):
         responses.add(
@@ -677,7 +752,6 @@ class TestResolveUserIds:
         )
         result = resolve_user_ids(gl, "alice")
         assert result == [1, 2]
-
     @responses.activate
     def test_not_found_returns_empty(self, gl):
         responses.add(
@@ -688,14 +762,10 @@ class TestResolveUserIds:
             match_querystring=False,
         )
         assert resolve_user_ids(gl, "ghost") == []
-
     def test_empty_username_returns_empty(self, gl):
         assert resolve_user_ids(gl, "") == []
-
-
 class TestFetchItemsByUserId:
     """id-based query for the multi-assignee / multi-reviewer case."""
-
     @responses.activate
     def test_assignee_id_issue(self, gl):
         responses.add(
@@ -712,7 +782,6 @@ class TestFetchItemsByUserId:
         assert last_qs["state"] == ["opened"]
         assert last_qs["with_membership"] == ["false"]
         assert last_qs["scope"] == ["all"]
-
     @responses.activate
     def test_assignee_id_mr(self, gl):
         responses.add(
@@ -729,7 +798,6 @@ class TestFetchItemsByUserId:
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs["assignee_id"] == ["42"]
         assert last_qs["scope"] == ["all"]
-
     @responses.activate
     def test_reviewer_id_mr(self, gl):
         responses.add(
@@ -746,18 +814,14 @@ class TestFetchItemsByUserId:
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs["reviewer_id"] == ["42"]
         assert last_qs["scope"] == ["all"]
-
     def test_reviewer_rejected_for_issue(self, gl):
         with pytest.raises(ValueError, match="not valid for kind"):
             fetch_items_by_user_id(gl, [42], Relation.REVIEWER, ItemKind.ISSUE)
-
     def test_mention_not_supported(self, gl):
         with pytest.raises(ValueError, match="has no id-based query"):
             fetch_items_by_user_id(gl, [42], Relation.MENTION, ItemKind.ISSUE)
-
     def test_empty_user_ids_returns_empty(self, gl):
         assert fetch_items_by_user_id(gl, [], Relation.ASSIGNEE, ItemKind.ISSUE) == []
-
     @responses.activate
     def test_multiple_user_ids_makes_one_call_each(self, gl):
         for _ in range(2):
@@ -777,11 +841,8 @@ class TestFetchItemsByUserId:
             for c in responses.calls
         ]
         assert assignee_ids == [["1"], ["2"]]
-
-
 class TestFetchSubscribed:
     """/issues?subscribed=true and /merge_requests?subscribed=true."""
-
     @responses.activate
     def test_issue_subscribed(self, gl):
         responses.add(
@@ -797,7 +858,6 @@ class TestFetchSubscribed:
         assert last_qs["subscribed"] == ["true"]
         assert last_qs["state"] == ["opened"]
         assert last_qs["with_membership"] == ["false"]
-
     @responses.activate
     def test_mr_subscribed(self, gl):
         responses.add(
@@ -811,16 +871,12 @@ class TestFetchSubscribed:
         assert len(result) == 2
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs["subscribed"] == ["true"]
-
-
 class TestFetchReacted:
     """/issues?my_reaction_emoji=... and /merge_requests?my_reaction_emoji=..."""
-
     def test_default_emoji_is_thumbsup(self):
         assert REACTION_EMOJI_DEFAULT == "thumbsup"
         assert EXTRA_REACTION == "reaction"
         assert EXTRA_SUBSCRIBED == "subscribed"
-
     @responses.activate
     def test_issue_default_thumbsup(self, gl):
         responses.add(
@@ -834,7 +890,6 @@ class TestFetchReacted:
         assert len(result) == 2
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs["my_reaction_emoji"] == ["thumbsup"]
-
     @responses.activate
     def test_custom_emoji(self, gl):
         responses.add(
@@ -848,7 +903,6 @@ class TestFetchReacted:
         assert len(result) == 2
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs["my_reaction_emoji"] == ["heart"]
-
     @responses.activate
     def test_mr_kind(self, gl):
         responses.add(
@@ -863,17 +917,13 @@ class TestFetchReacted:
         last_qs = parse_qs(urlparse(responses.calls[-1].request.url).query)
         assert last_qs["my_reaction_emoji"] == ["thumbsup"]
         assert "/merge_requests" in responses.calls[-1].request.url
-
-
 class TestIterPagesRunawayGuard:
     """_iter_pages 必须有硬上限, 防止服务端的"最后一页恰好等于 page_size"
     错误返回导致无限循环。"""
-
     @responses.activate
     def test_stops_after_max_pages_even_if_each_page_equals_page_size(self, gl, monkeypatch):
         """每次都返回 page_size 条, 没有终止信号 -> 仍必须在 _MAX_PAGES 后停下。"""
         from gitlab_issues_finder.queries import _MAX_PAGES
-
         # 每次都返回满页; responses 默认按调用顺序 round-robin
         full_page = [{"id": i, "iid": i} for i in range(1, 21)]
         for _ in range(_MAX_PAGES + 5):
@@ -884,7 +934,6 @@ class TestIterPagesRunawayGuard:
                 status=200,
                 match_querystring=False,
             )
-
         # monkeypatch 降低上限, 让测试跑得更快
         monkeypatch.setattr("gitlab_issues_finder.queries._MAX_PAGES", 5)
         collected = list(_iter_pages(gl, {"state": "opened"}, page_size=20, path="/issues"))
