@@ -469,6 +469,114 @@ class TestMentionedViaSearch:
         _add_paginated_endpoint(responses, "/issues", [[]])
         mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
         assert mentioned == []
+    @responses.activate
+    def test_search_notes_excludes_self_authored(self, gl):
+        """``/search?scope=notes`` 命中本人发出的 note (里面出现 @<self>) 时,
+        该 issue 不应进入 ``mentioned``。这是「@我」大量误统计的根因。
+        """
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/search",
+            json=[{
+                "id": 9001,
+                "type": "Note",
+                "body": "@alice 自己 @ 自己一下",
+                "author": {"id": 12, "username": "alice", "name": "Alice"},
+                "issue": {
+                    "iid": 7,
+                    "project_id": 201,
+                    "title": "Issue from search",
+                    "state": "opened",
+                    "labels": [],
+                    "web_url": "https://gl/x/y/-/issues/7",
+                    "updated_at": "2026-07-03T00:00:00Z",
+                },
+            }],
+            status=200,
+            match_querystring=False,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/search",
+            json=[],
+            status=200,
+            match_querystring=False,
+        )
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
+        # alice 自己的 @alice 不算「@我」, 该 issue 必须被排除
+        assert mentioned == []
+    @responses.activate
+    def test_search_notes_includes_other_authored(self, gl):
+        """``/search?scope=notes`` 命中他人发出的 note (里面 @<U>) 时,
+        该 issue 必须进入 ``mentioned``。"""
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/search",
+            json=[{
+                "id": 9002,
+                "type": "Note",
+                "body": "@alice 帮忙看一下",
+                "author": {"id": 99, "username": "bob", "name": "Bob"},
+                "issue": {
+                    "iid": 7,
+                    "project_id": 201,
+                    "title": "Issue from search",
+                    "state": "opened",
+                    "labels": [],
+                    "web_url": "https://gl/x/y/-/issues/7",
+                    "updated_at": "2026-07-03T00:00:00Z",
+                },
+            }],
+            status=200,
+            match_querystring=False,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/search",
+            json=[],
+            status=200,
+            match_querystring=False,
+        )
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
+        assert len(mentioned) == 1
+        assert (mentioned[0].project_id, mentioned[0].iid) == (201, 7)
+    @responses.activate
+    def test_search_notes_includes_note_with_missing_author(self, gl):
+        """``/search?scope=notes`` 命中的 note 缺 ``author`` 字段时,
+        应保守视为「非本人」——issue 必须仍能进入 ``mentioned``。
+        验证 ``_is_self_authored_note`` 的防御性 False 契约未被新过滤破坏。
+        """
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/search",
+            json=[{
+                "id": 9003,
+                "type": "Note",
+                "body": "@alice 帮忙",
+                # 注意: 没有 author 键
+                "issue": {
+                    "iid": 7,
+                    "project_id": 201,
+                    "title": "Issue from search",
+                    "state": "opened",
+                    "labels": [],
+                    "web_url": "https://gl/x/y/-/issues/7",
+                    "updated_at": "2026-07-03T00:00:00Z",
+                },
+            }],
+            status=200,
+            match_querystring=False,
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/search",
+            json=[],
+            status=200,
+            match_querystring=False,
+        )
+        mentioned, _ = fetch_issue_low_threshold_items(gl, "alice")
+        assert len(mentioned) == 1
+        assert (mentioned[0].project_id, mentioned[0].iid) == (201, 7)
 class TestIterPagesDefensive:
     """_iter_pages 防御性: 不应让非 list 响应 / 非 dict item 透传到下游。"""
 

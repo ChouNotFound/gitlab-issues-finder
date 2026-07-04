@@ -56,6 +56,89 @@ function Write-Err($msg) {
     Write-Host "  [ERR] $msg" -ForegroundColor Red
 }
 
+# ===== 自动重建辅助函数 =====
+# 已知会触发 .venv 损坏的信号 (case-insensitive)。在烟雾测试 stderr
+# 或 pip 输出中扫描。``Microsoft.PowerShell.Commands.WriteErrorException``
+# 太宽 (任何 PowerShell 内部错误都匹配), 故不纳入。
+$script:BrokenVenvPatterns = @(
+    'ModuleNotFoundError'
+    'ImportError'
+    '(pydantic-core|watchfiles|httptools).{0,200}(failed|building|error|wheel)'
+    'error: Rust'
+    'maturin'
+    'Microsoft Visual C\+\+'
+    'Failed building wheel'
+)
+
+function Test-VenvHealth {
+    <#
+    烟雾测试: 导入应用入口。失败时把 stderr 拿去匹配已知损坏信号。
+    返回 PSCustomObject: { Healthy: bool, Reason: str, Output: str }
+    #>
+    $output = & $VenvPython -c "import gitlab_issues_finder.app" 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) {
+        return [PSCustomObject]@{ Healthy = $true; Reason = ''; Output = '' }
+    }
+    foreach ($pattern in $script:BrokenVenvPatterns) {
+        if ($output -match "(?i)$pattern") {
+            return [PSCustomObject]@{
+                Healthy = $false
+                Reason  = "匹配信号 '$pattern'"
+                Output  = $output
+            }
+        }
+    }
+    # 烟雾测试失败但没匹配任何已知信号 —— 仍视为不健康, 让用户决定。
+    return [PSCustomObject]@{
+        Healthy = $false
+        Reason  = '烟雾测试失败 (未匹配已知信号)'
+        Output  = $output
+    }
+}
+
+function Invoke-VenvRebuild {
+    <#
+    删除 .venv, 用 step 1 发现的 $PythonCmd 重建, 装依赖, 再烟雾测试。
+    返回 $true 表示重建后烟雾通过; $false 失败。
+    #>
+    if ($script:RebuildCount -ge 1) {
+        Write-Err "已达到本脚本最大重建次数 (1 次), 放弃自动修复。"
+        return $false
+    }
+    $script:RebuildCount++
+
+    Write-Host "    正在删除旧虚拟环境..." -ForegroundColor Gray
+    if (Test-Path $VenvDir) {
+        Remove-Item -Recurse -Force $VenvDir
+    }
+
+    Write-Host "    正在重建虚拟环境..." -ForegroundColor Gray
+    & $PythonCmd -m venv $VenvDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "重建虚拟环境失败"
+        return $false
+    }
+
+    Write-Host "    正在重装依赖..." -ForegroundColor Gray
+    $pipOutput = & $VenvPython -m pip install --disable-pip-version-check -r $ReqFile 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "重装依赖失败。请检查网络或 requirements.txt。"
+        Write-Host "    完整 pip 输出:" -ForegroundColor Yellow
+        Write-Host $pipOutput
+        return $false
+    }
+
+    $retryOutput = & $VenvPython -c "import gitlab_issues_finder.app" 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "重建后烟雾测试仍然失败:"
+        Write-Host $retryOutput
+        return $false
+    }
+
+    Write-Ok "虚拟环境已重建"
+    return $true
+}
+
 # ===== 1. Python 检查 =====
 Write-Step "检查 Python 环境"
 $PythonCmd = $null
@@ -126,6 +209,27 @@ if ($NeedInstall) {
         exit 1
     }
     Write-Ok "依赖安装完成"
+}
+
+# ===== 3.5. 虚拟环境健康检查 =====
+# 装完依赖后做一次烟雾导入, 捕获已知 wheel-build / Import 失败信号,
+# 提示用户删 .venv 重建。整个脚本最多重建 1 次。
+$script:RebuildCount = 0
+$health = Test-VenvHealth
+if (-not $health.Healthy) {
+    Write-Warn "检测到虚拟环境可能损坏：$($health.Reason)"
+    # 显示最后 10 行 stderr, 让用户看清触发原因再决定
+    $tail = ($health.Output -split "`n" | Select-Object -Last 10) -join "`n"
+    Write-Host "    烟雾测试输出（最后 10 行）：" -ForegroundColor Gray
+    Write-Host "    $tail" -ForegroundColor Gray
+    $answer = Read-Host "    是否删除 .venv 并重建？[y/N]"
+    if ($answer -match '^[Yy]') {
+        if (-not (Invoke-VenvRebuild)) {
+            exit 1
+        }
+    } else {
+        Write-Warn "已跳过重建。继续启动很可能会失败。"
+    }
 }
 
 # ===== 4. .env 检查 =====

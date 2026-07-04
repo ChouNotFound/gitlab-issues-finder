@@ -400,6 +400,13 @@ def _mentioned_via_search(
             gl, {"scope": "notes", "search": search_query}, page_size, path="/search"
         ):
             # notes 返回 ``type=Note``, 挂载的 issue / merge_request 在顶层字段
+            # 自己发出的评论里出现 @<username> 不算「@我」——与慢路径
+            # (fetch_issue_low_threshold_items) 行为一致。``/search`` 不区分
+            # 作者, 故此处必须显式过滤, 否则 user 在自己评论里 @ 自己会被
+            # 错误计入 「@我」。``_is_self_authored_note`` 在 author 缺失时
+            # 保守视为「非本人」, 因此不会误排除 author 字段缺失的 note。
+            if _is_self_authored_note(note, username):
+                continue
             issue_payload = note.get("issue") or {}
             if not issue_payload:
                 continue
